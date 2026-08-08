@@ -1,0 +1,42 @@
+/* src/components/MediaUpload/MediaUpload.module.css */
+.uploadContainer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
+.uploadLabel {
+  display: inline-block;
+  padding: 0.5rem 1rem;
+  background-color: #007bff;
+  color: white;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.uploadLabel:hover {
+  background-color: #0056b3;
+}
+
+.audioLabel {
+  background-color: #8e44ad;
+}
+
+.audioLabel:hover {
+  background-color: #71368a;
+}
+
+.error {
+  max-width: 280px;
+  overflow: hidden;
+  color: #b42318;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.uploadInput {
+  display: none; /* Hide the default input */
+}

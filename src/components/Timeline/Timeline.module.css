@@ -1,0 +1,223 @@
+.timelineWrapper {
+  min-height: 240px;
+  overflow: hidden;
+  background: #171b24;
+  color: #eef2f7;
+}
+
+.timelineToolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 42px;
+  padding-right: 10px;
+  background: #171b24;
+}
+
+.timelineToolbar > button {
+  padding: 5px 9px;
+  border: 1px solid #3c4658;
+  border-radius: 4px;
+  background: #252d3a;
+  color: #fff;
+  cursor: pointer;
+}
+
+.timelineToolbar > button:disabled { opacity: .35; cursor: default; }
+.timelineToolbar > label { display: flex; gap: 4px; align-items: center; font-size: 11px; }
+
+.scrollContainer {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-color: #657083 #202632;
+  scrollbar-width: thin;
+}
+
+.timelineContent { min-width: 100%; }
+
+.tracks {
+  position: relative;
+  min-height: 170px;
+  padding: 8px 0 10px;
+  background: #202632;
+  cursor: pointer;
+  user-select: none;
+}
+
+.track {
+  position: relative;
+  height: 70px;
+  margin: 0 0 7px;
+  overflow: hidden;
+  border-block: 1px solid #354052;
+  background: #252d3a;
+}
+
+.audioTrack { background: #222b31; }
+
+.trackLabel {
+  position: sticky;
+  left: 8px;
+  top: 5px;
+  z-index: 50;
+  display: inline-block;
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: rgba(10, 13, 18, 0.76);
+  color: #aab5c6;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .09em;
+  pointer-events: none;
+}
+
+.videoClip,
+.audioClip {
+  position: absolute;
+  inset-block: 4px;
+  min-width: 5px;
+  overflow: hidden;
+  border: 1px solid #54a2ef;
+  border-radius: 5px;
+  background: #193e62;
+  cursor: grab;
+}
+
+.audioClip {
+  border-color: #b36bce;
+  background: #4b2858;
+}
+
+.videoClip:active,
+.audioClip:active { cursor: grabbing; }
+
+.selectedClip {
+  border-color: #ffd166;
+  box-shadow: 0 0 0 2px rgba(255, 209, 102, .55);
+}
+
+.trimHandle {
+  position: absolute;
+  z-index: 18;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  background: rgba(255, 209, 102, .75);
+  cursor: ew-resize;
+  opacity: 0;
+}
+
+.selectedClip .trimHandle,
+.videoClip:hover .trimHandle,
+.audioClip:hover .trimHandle { opacity: 1; }
+
+.trimStart { left: 0; }
+.trimEnd { right: 0; }
+
+.thumbnailCanvas { position: absolute; inset: 0; opacity: .78; }
+
+.clipName {
+  position: absolute;
+  left: 6px;
+  bottom: 4px;
+  max-width: calc(100% - 12px);
+  overflow: hidden;
+  color: white;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 3px #000;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.deleteClip {
+  position: absolute;
+  z-index: 20;
+  top: 3px;
+  right: 3px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(12, 15, 21, .78);
+  color: #fff;
+  font-size: 16px;
+  line-height: 18px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s ease, background .15s ease;
+}
+
+.videoClip:hover .deleteClip,
+.audioClip:hover .deleteClip,
+.deleteClip:focus-visible { opacity: 1; }
+
+.deleteClip:hover { background: #d4384d; }
+
+.waveform {
+  position: absolute;
+  inset: 8px 4px;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  opacity: .82;
+}
+
+.waveform i {
+  flex: 1 1 1px;
+  min-width: 1px;
+  max-width: 3px;
+  border-radius: 2px;
+  background: #e0a6f2;
+}
+
+.playhead {
+  position: absolute;
+  z-index: 100;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #ff4f64;
+  box-shadow: 0 0 6px rgba(255, 79, 100, .75);
+  pointer-events: none;
+}
+
+.playhead::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -4px;
+  border-top: 7px solid #ff4f64;
+  border-inline: 5px solid transparent;
+}
+
+.dragPreview {
+  position: absolute;
+  z-index: 90;
+  top: 12px;
+  height: 62px;
+  border: 2px dashed #68b6ff;
+  border-radius: 5px;
+  background: rgba(68, 153, 234, .2);
+  pointer-events: none;
+}
+
+.audioPreview {
+  top: 89px;
+  border-color: #d18ae9;
+  background: rgba(179, 107, 206, .18);
+}
+
+.placeholder,
+.trackStatus {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  z-index: 60;
+  transform: translate(-50%, -50%);
+  color: #aab5c6;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.trackStatus { color: #ffd166; }

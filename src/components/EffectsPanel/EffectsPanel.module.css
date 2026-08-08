@@ -1,0 +1,28 @@
+.effectsPanel {
+  width: 100%;
+  height:100%;
+  background-color: #282828;
+  color: #ffffff;
+  padding: 10px;
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+
+.effectsPanel h2 {
+  margin-top: 0;
+  margin-bottom: 15px;
+  font-size: 1.2em;
+}
+
+.effectItem {
+  padding: 8px;
+  margin-bottom: 5px;
+  background-color: #3a3a3a;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.effectItem:hover {
+  background-color: #505050;
+}

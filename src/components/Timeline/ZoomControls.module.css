@@ -1,0 +1,134 @@
+.zoomControls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background-color: #34495e;
+  border-bottom: 1px solid #2c3e50;
+  min-height: 40px;
+}
+
+.zoomInfo {
+  display: flex;
+  align-items: center;
+  min-width: 50px;
+}
+
+.zoomLevel {
+  font-size: 12px;
+  font-weight: 600;
+  color: #ecf0f1;
+  background-color: #2c3e50;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid #7f8c8d;
+}
+
+.zoomButtons {
+  display: flex;
+  gap: 4px;
+}
+
+.zoomButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 28px;
+  background-color: #2c3e50;
+  border: 1px solid #7f8c8d;
+  border-radius: 4px;
+  color: #ecf0f1;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 0;
+}
+
+.zoomButton:hover:not(:disabled) {
+  background-color: #3498db;
+  border-color: #2980b9;
+  color: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.zoomButton:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.zoomButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background-color: #2c3e50;
+  border-color: #7f8c8d;
+  color: #7f8c8d;
+}
+
+.zoomButton:disabled:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.zoomSlider {
+  flex: 1;
+  min-width: 100px;
+  margin-left: 8px;
+}
+
+.slider {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: #2c3e50;
+  outline: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #3498db;
+  cursor: pointer;
+  border: 2px solid #2c3e50;
+  transition: all 0.2s ease;
+}
+
+.slider::-webkit-slider-thumb:hover {
+  background: #2980b9;
+  transform: scale(1.1);
+  box-shadow: 0 2px 6px rgba(52, 152, 219, 0.3);
+}
+
+.slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #3498db;
+  cursor: pointer;
+  border: 2px solid #2c3e50;
+  transition: all 0.2s ease;
+}
+
+.slider::-moz-range-thumb:hover {
+  background: #2980b9;
+  transform: scale(1.1);
+  box-shadow: 0 2px 6px rgba(52, 152, 219, 0.3);
+}
+
+.slider::-webkit-slider-track {
+  background: #2c3e50;
+  height: 4px;
+  border-radius: 2px;
+}
+
+.slider::-moz-range-track {
+  background: #2c3e50;
+  height: 4px;
+  border-radius: 2px;
+  border: none;
+}
