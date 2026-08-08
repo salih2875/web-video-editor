@@ -1,4 +1,4 @@
-import React, {
+import {
   createContext,
   useCallback,
   useContext,
@@ -13,28 +13,30 @@ import type {
   Clip,
   EditorContextType,
   EditorState,
-  InternalEditorContextType,
-  TimeRange,
+  EffectName,
+  MediaSelection,
 } from "../types/editor";
 import { loadProjectSnapshot, saveProjectSnapshot } from "../utils/projectStorage";
+import {
+  createAudioPeaks,
+  createVideoThumbnailStrip,
+  getMediaDuration,
+} from "../utils/mediaProcessing";
 import { getTopTimelineItem } from "../utils/timelineMath";
 
+const MAX_HISTORY_LENGTH = 50;
+const MIN_SPLIT_DURATION_MS = 50;
+const DEFAULT_TRANSFORM = { x: 0, y: 0, scale: 1, rotation: 0, fit: "contain" } as const;
+
 const initialEditorState: EditorState = {
-  videoFile: null,
-  audioFile: null,
-  videoSources: [],
   clips: [],
   audioClips: [],
-  Effects: [],
-  currentClip: null,
+  effects: [],
   selectedItem: null,
-  videoElement: null,
-  duration: 0,
   totalDuration: 0,
   currentTime: 0,
   isSeeking: false,
   isPlaying: false,
-  selectedRange: null,
   isGeneratingThumbnails: false,
   isLoadingAudio: false,
   mediaError: null,
@@ -45,189 +47,121 @@ const initialEditorState: EditorState = {
   snapEnabled: true,
   loopPlayback: true,
   timelineZoom: 1,
-  timelineScrollPosition: 0,
-  ffmpegStatus: "idle",
-  trimStatus: "idle",
-  trimProgress: 0,
-  lastTrimmedUrl: null,
-  trimError: null,
 };
 
-const EditorContext = createContext<InternalEditorContextType | undefined>(undefined);
+const EditorContext = createContext<EditorContextType | undefined>(undefined);
 
 const makeId = (prefix: string) =>
   `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
-const getMediaDuration = (url: string, kind: "audio" | "video") =>
-  new Promise<number>((resolve, reject) => {
-    const media = document.createElement(kind);
-    media.preload = "metadata";
-    media.onloadedmetadata = () => {
-      const duration = media.duration * 1000;
-      media.removeAttribute("src");
-      media.load();
-      if (Number.isFinite(duration) && duration > 0) resolve(duration);
-      else reject(new Error(`The ${kind} has no usable duration.`));
-    };
-    media.onerror = () => reject(new Error(`The selected ${kind} could not be decoded.`));
-    media.src = url;
-  });
+const getErrorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
 
-const seekVideo = (video: HTMLVideoElement, time: number) =>
-  new Promise<void>((resolve, reject) => {
-    const done = () => resolve();
-    const failed = () => reject(new Error("Could not seek while creating thumbnails."));
-    video.addEventListener("seeked", done, { once: true });
-    video.addEventListener("error", failed, { once: true });
-    video.currentTime = time;
-  });
+const hasChanges = <T extends object>(source: T, patch: Partial<T>) =>
+  Object.entries(patch).some(([key, value]) => Reflect.get(source, key) !== value);
 
-const createThumbnails = async (
-  videoSrc: string,
-  rangeMs?: { start: number; end: number },
-): Promise<HTMLCanvasElement> => {
-  const frameCount = 8;
-  const frameWidth = 120;
-  const frameHeight = 68;
-  const video = document.createElement("video");
-  video.preload = "auto";
-  video.muted = true;
-  video.src = videoSrc;
-  await new Promise<void>((resolve, reject) => {
-    video.onloadedmetadata = () => resolve();
-    video.onerror = () => reject(new Error("Could not decode video thumbnails."));
-  });
+const getNextZIndex = (items: Array<{ zIndex: number }>) =>
+  items.reduce((highest, item) => Math.max(highest, item.zIndex), -1) + 1;
 
-  const sourceStart = Math.max(0, (rangeMs?.start ?? 0) / 1000);
-  const sourceEnd = Math.min(video.duration, (rangeMs?.end ?? video.duration * 1000) / 1000);
-  const canvas = document.createElement("canvas");
-  canvas.width = frameWidth * frameCount;
-  canvas.height = frameHeight;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Canvas is unavailable for video thumbnails.");
-  context.fillStyle = "#090b10";
-  context.fillRect(0, 0, canvas.width, canvas.height);
-
-  const sourceAspect = (video.videoWidth || 16) / (video.videoHeight || 9);
-  for (let index = 0; index < frameCount; index += 1) {
-    const progress = (index + 0.5) / frameCount;
-    await seekVideo(video, sourceStart + (sourceEnd - sourceStart) * progress);
-    let width = frameWidth;
-    let height = width / sourceAspect;
-    if (height > frameHeight) {
-      height = frameHeight;
-      width = height * sourceAspect;
-    }
-    const x = index * frameWidth + (frameWidth - width) / 2;
-    const y = (frameHeight - height) / 2;
-    context.drawImage(video, x, y, width, height);
-  }
-  video.removeAttribute("src");
-  video.load();
-  return canvas;
+const getTotalDuration = (clips: Clip[], audioClips: AudioClip[]) => {
+  let duration = 0;
+  for (const clip of clips) duration = Math.max(duration, clip.timelineEnd);
+  for (const clip of audioClips) duration = Math.max(duration, clip.timelineEnd);
+  return duration;
 };
 
-const createAudioPeaks = async (file: File, peakCount = 180): Promise<number[]> => {
-  try {
-    const audioContext = new AudioContext();
-    const buffer = await audioContext.decodeAudioData(await file.arrayBuffer());
-    const channel = buffer.getChannelData(0);
-    const samplesPerPeak = Math.max(1, Math.floor(channel.length / peakCount));
-    const peaks = Array.from({ length: peakCount }, (_, peakIndex) => {
-      const start = peakIndex * samplesPerPeak;
-      const end = Math.min(channel.length, start + samplesPerPeak);
-      let max = 0;
-      for (let index = start; index < end; index += 1) {
-        max = Math.max(max, Math.abs(channel[index]));
-      }
-      return max;
-    });
-    await audioContext.close();
-    const maxPeak = Math.max(...peaks, 0.01);
-    return peaks.map((peak) => peak / maxPeak);
-  } catch {
-    return Array.from({ length: peakCount }, (_, index) =>
-      0.2 + Math.abs(Math.sin(index * 0.41)) * 0.35,
-    );
-  }
-};
-
-const getTotalDuration = (clips: Clip[], audioClips: AudioClip[]) =>
-  Math.max(
-    0,
-    ...clips.map((clip) => clip.timelineEnd),
-    ...audioClips.map((clip) => clip.timelineEnd),
-  );
-
-const findActiveClip = (time: number, clips: Clip[]): { clip: Clip | null } => {
-  return { clip: getTopTimelineItem(time, clips) };
-};
-
-const findActiveAudioClip = (time: number, clips: AudioClip[]): AudioClip | null => {
-  return getTopTimelineItem(time, clips);
+const withTimelineMetrics = (state: EditorState): EditorState => {
+  const totalDuration = getTotalDuration(state.clips, state.audioClips);
+  const currentTime = Math.min(state.currentTime, totalDuration);
+  return {
+    ...state,
+    totalDuration,
+    currentTime,
+    isPlaying: totalDuration > 0 && state.isPlaying,
+  };
 };
 
 interface HistorySnapshot {
   clips: Clip[];
   audioClips: AudioClip[];
-  Effects: EditorState["Effects"];
+  effects: EditorState["effects"];
   selectedItem: EditorState["selectedItem"];
 }
 
-export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+const captureSnapshot = (source: EditorState): HistorySnapshot => ({
+  clips: source.clips.map((clip) => ({ ...clip, transform: { ...clip.transform } })),
+  audioClips: source.audioClips.map((clip) => ({ ...clip, peaks: [...clip.peaks] })),
+  effects: source.effects.map((effect) => ({ ...effect })),
+  selectedItem: source.selectedItem ? { ...source.selectedItem } : null,
+});
+
+const selectionExists = (
+  selection: MediaSelection | null,
+  clips: Clip[],
+  audioClips: AudioClip[],
+) => !selection || (selection.type === "video"
+  ? clips.some((clip) => clip.id === selection.id)
+  : audioClips.some((clip) => clip.id === selection.id));
+
+export const EditorProvider = ({ children }: { children: ReactNode }) => {
   const [state, setState] = useState(initialEditorState);
   const stateRef = useRef(state);
   const objectUrlsRef = useRef(new Set<string>());
   const historyRef = useRef<HistorySnapshot[]>([]);
   const futureRef = useRef<HistorySnapshot[]>([]);
+  const hasAttemptedAutosaveLoadRef = useRef(false);
   stateRef.current = state;
 
-  const captureSnapshot = useCallback((source: EditorState): HistorySnapshot => ({
-    clips: source.clips.map((clip) => ({ ...clip, transform: { ...clip.transform } })),
-    audioClips: source.audioClips.map((clip) => ({ ...clip, peaks: [...clip.peaks] })),
-    Effects: [...source.Effects],
-    selectedItem: source.selectedItem ? { ...source.selectedItem } : null,
-  }), []);
-
-  const recordHistory = useCallback(() => {
-    historyRef.current = [...historyRef.current.slice(-49), captureSnapshot(stateRef.current)];
+  const recordHistory = useCallback((source = stateRef.current) => {
+    historyRef.current = [
+      ...historyRef.current.slice(-(MAX_HISTORY_LENGTH - 1)),
+      captureSnapshot(source),
+    ];
     futureRef.current = [];
-  }, [captureSnapshot]);
+  }, []);
 
   const updateState = useCallback((patch: Partial<EditorState>) => {
     setState((previous) => {
       const next = { ...previous, ...patch };
-      if (patch.clips || patch.audioClips) {
-        next.totalDuration = getTotalDuration(next.clips, next.audioClips);
-        next.currentTime = Math.min(next.currentTime, next.totalDuration);
-      }
-      return next;
+      return patch.clips || patch.audioClips ? withTimelineMetrics(next) : next;
     });
   }, []);
 
   const setVideoFile = useCallback(async (file: File | null) => {
     if (!file) {
+      const current = stateRef.current;
+      if (!current.clips.length) return;
+      recordHistory(current);
       setState((previous) => {
-        const videoUrls = new Set(previous.clips.map((clip) => clip.clipURL));
-        const audioClips = previous.audioClips.filter((clip) => !clip.sourceVideoClipId);
-        videoUrls.forEach((url) => {
-          if (!audioClips.some((clip) => clip.clipURL === url)) URL.revokeObjectURL(url);
-        });
-        const next = { ...previous, videoFile: null, videoSources: [], clips: [], audioClips, currentClip: null };
-        next.totalDuration = getTotalDuration(next.clips, next.audioClips);
-        next.currentTime = Math.min(next.currentTime, next.totalDuration);
-        return next;
+        const removedIds = new Set(previous.clips.map((clip) => clip.id));
+        const audioClips = previous.audioClips.filter(
+          (clip) => !clip.sourceVideoClipId || !removedIds.has(clip.sourceVideoClipId),
+        );
+        const next = {
+          ...previous,
+          clips: [],
+          audioClips,
+          effects: [],
+          selectedItem: selectionExists(previous.selectedItem, [], audioClips)
+            ? previous.selectedItem
+            : null,
+          isDirty: true,
+          canUndo: true,
+          canRedo: false,
+          isSeeking: true,
+        };
+        return withTimelineMetrics(next);
       });
       return;
     }
+
     const url = URL.createObjectURL(file);
     objectUrlsRef.current.add(url);
-    const videoClipId = makeId("video");
     updateState({ isGeneratingThumbnails: true, mediaError: null });
     try {
       const [clipDuration, thumbnail, peaks] = await Promise.all([
         getMediaDuration(url, "video"),
-        createThumbnails(url),
+        createVideoThumbnailStrip(url),
         createAudioPeaks(file),
       ]);
       recordHistory();
@@ -236,10 +170,11 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           (end, clip) => Math.max(end, clip.timelineEnd),
           0,
         );
+        const id = makeId("video");
         const clip: Clip = {
-          id: videoClipId,
+          id,
           name: file.name,
-          zIndex: previous.clips.length,
+          zIndex: getNextZIndex(previous.clips),
           clipURL: url,
           clipStart: 0,
           clipEnd: clipDuration,
@@ -248,14 +183,12 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           timelineStart,
           timelineEnd: timelineStart + clipDuration,
           thumbnail,
-          effects: [],
-          transform: { x: 0, y: 0, scale: 1, rotation: 0, fit: "contain" },
+          transform: { ...DEFAULT_TRANSFORM },
         };
-        const clips = [...previous.clips, clip];
         const soundtrack: AudioClip = {
           id: makeId("audio"),
           name: `${file.name} · soundtrack`,
-          zIndex: previous.audioClips.length,
+          zIndex: getNextZIndex(previous.audioClips),
           clipURL: url,
           clipStart: 0,
           clipEnd: clipDuration,
@@ -268,51 +201,51 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           muted: false,
           fadeIn: 0,
           fadeOut: 0,
-          sourceVideoClipId: videoClipId,
+          sourceVideoClipId: id,
         };
-        const audioClips = [...previous.audioClips, soundtrack];
-        return {
+        return withTimelineMetrics({
           ...previous,
-          videoFile: file,
-          videoSources: [...previous.videoSources, url],
-          clips,
-          audioClips,
-          currentClip: previous.currentClip ?? clip,
-          duration: clipDuration,
-          totalDuration: getTotalDuration(clips, audioClips),
+          clips: [...previous.clips, clip],
+          audioClips: [...previous.audioClips, soundtrack],
           isGeneratingThumbnails: false,
-          selectedItem: { type: "video", id: clip.id },
+          selectedItem: { type: "video", id },
           isDirty: true,
           canUndo: true,
-        };
+          canRedo: false,
+        });
       });
     } catch (error) {
+      objectUrlsRef.current.delete(url);
       URL.revokeObjectURL(url);
       updateState({
         isGeneratingThumbnails: false,
-        mediaError: error instanceof Error ? error.message : String(error),
+        mediaError: getErrorMessage(error),
       });
     }
   }, [recordHistory, updateState]);
 
   const setAudioFile = useCallback(async (file: File | null) => {
     if (!file) {
+      const current = stateRef.current;
+      if (!current.audioClips.some((clip) => !clip.sourceVideoClipId)) return;
+      recordHistory(current);
       setState((previous) => {
-        const removed = previous.audioClips.filter((clip) => !clip.sourceVideoClipId);
         const audioClips = previous.audioClips.filter((clip) => clip.sourceVideoClipId);
-        new Set(removed.map((clip) => clip.clipURL)).forEach((url) => {
-          if (!audioClips.some((clip) => clip.clipURL === url)
-            && !previous.clips.some((clip) => clip.clipURL === url)) {
-            URL.revokeObjectURL(url);
-          }
+        return withTimelineMetrics({
+          ...previous,
+          audioClips,
+          selectedItem: selectionExists(previous.selectedItem, previous.clips, audioClips)
+            ? previous.selectedItem
+            : null,
+          isDirty: true,
+          canUndo: true,
+          canRedo: false,
+          isSeeking: true,
         });
-        const next = { ...previous, audioFile: null, audioClips };
-        next.totalDuration = getTotalDuration(next.clips, next.audioClips);
-        next.currentTime = Math.min(next.currentTime, next.totalDuration);
-        return next;
       });
       return;
     }
+
     const url = URL.createObjectURL(file);
     objectUrlsRef.current.add(url);
     updateState({ isLoadingAudio: true, mediaError: null });
@@ -330,7 +263,7 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         const clip: AudioClip = {
           id: makeId("audio"),
           name: file.name,
-          zIndex: previous.audioClips.length,
+          zIndex: getNextZIndex(previous.audioClips),
           clipURL: url,
           clipStart: 0,
           clipEnd: clipDuration,
@@ -344,98 +277,88 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           fadeIn: 0,
           fadeOut: 0,
         };
-        const audioClips = [...previous.audioClips, clip];
-        return {
+        return withTimelineMetrics({
           ...previous,
-          audioFile: file,
-          audioClips,
-          totalDuration: getTotalDuration(previous.clips, audioClips),
+          audioClips: [...previous.audioClips, clip],
           isLoadingAudio: false,
           selectedItem: { type: "audio", id: clip.id },
           isDirty: true,
           canUndo: true,
-        };
+          canRedo: false,
+        });
       });
     } catch (error) {
+      objectUrlsRef.current.delete(url);
       URL.revokeObjectURL(url);
-      updateState({
-        isLoadingAudio: false,
-        mediaError: error instanceof Error ? error.message : String(error),
-      });
+      updateState({ isLoadingAudio: false, mediaError: getErrorMessage(error) });
     }
   }, [recordHistory, updateState]);
 
   useEffect(() => () => {
-    const current = stateRef.current;
     objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-    if (current.lastTrimmedUrl) URL.revokeObjectURL(current.lastTrimmedUrl);
   }, []);
 
   const seek = useCallback((time: number) => {
-    const total = stateRef.current.totalDuration;
-    updateState({ currentTime: Math.max(0, Math.min(time, total)), isSeeking: true });
+    const totalDuration = stateRef.current.totalDuration;
+    updateState({
+      currentTime: Math.max(0, Math.min(time, totalDuration)),
+      isSeeking: true,
+    });
   }, [updateState]);
 
   const removeVideoClip = useCallback((id: string) => {
-    recordHistory();
+    const current = stateRef.current;
+    if (!current.clips.some((clip) => clip.id === id)) return;
+    recordHistory(current);
     setState((previous) => {
-      const removed = previous.clips.find((clip) => clip.id === id);
-      if (!removed) return previous;
       const clips = previous.clips.filter((clip) => clip.id !== id);
-      const totalDuration = getTotalDuration(clips, previous.audioClips);
-      const currentTime = Math.min(previous.currentTime, totalDuration);
-      return {
+      const audioClips = previous.audioClips.filter((clip) => clip.sourceVideoClipId !== id);
+      const selectedItem = selectionExists(previous.selectedItem, clips, audioClips)
+        ? previous.selectedItem
+        : null;
+      return withTimelineMetrics({
         ...previous,
         clips,
-        videoFile: clips.length ? previous.videoFile : null,
-        videoSources: previous.videoSources.filter((url) =>
-          clips.some((clip) => clip.clipURL === url),
-        ),
-        totalDuration,
-        currentTime,
-        currentClip: findActiveClip(currentTime, clips).clip,
-        isPlaying: totalDuration > 0 && previous.isPlaying,
-        isSeeking: true,
-        selectedItem: previous.selectedItem?.id === id ? null : previous.selectedItem,
+        audioClips,
+        effects: previous.effects.filter((effect) => effect.clipId !== id),
+        selectedItem,
         isDirty: true,
         canUndo: true,
         canRedo: false,
-      };
+        isSeeking: true,
+      });
     });
   }, [recordHistory]);
 
   const removeAudioClip = useCallback((id: string) => {
-    recordHistory();
+    const current = stateRef.current;
+    if (!current.audioClips.some((clip) => clip.id === id)) return;
+    recordHistory(current);
     setState((previous) => {
-      const removed = previous.audioClips.find((clip) => clip.id === id);
-      if (!removed) return previous;
       const audioClips = previous.audioClips.filter((clip) => clip.id !== id);
-      const totalDuration = getTotalDuration(previous.clips, audioClips);
-      return {
+      return withTimelineMetrics({
         ...previous,
         audioClips,
-        audioFile: audioClips.some((clip) => !clip.sourceVideoClipId)
-          ? previous.audioFile
-          : null,
-        totalDuration,
-        currentTime: Math.min(previous.currentTime, totalDuration),
-        isPlaying: totalDuration > 0 && previous.isPlaying,
-        isSeeking: true,
-        selectedItem: previous.selectedItem?.id === id ? null : previous.selectedItem,
+        selectedItem: previous.selectedItem?.type === "audio" && previous.selectedItem.id === id
+          ? null
+          : previous.selectedItem,
         isDirty: true,
         canUndo: true,
         canRedo: false,
-      };
+        isSeeking: true,
+      });
     });
   }, [recordHistory]);
 
   const updateVideoClip = useCallback((id: string, patch: Partial<Clip>) => {
-    recordHistory();
+    const current = stateRef.current;
+    const original = current.clips.find((clip) => clip.id === id);
+    if (!original || !hasChanges(original, patch)) return;
+    recordHistory(current);
     setState((previous) => {
-      const original = previous.clips.find((clip) => clip.id === id);
-      if (!original) return previous;
       const clips = previous.clips.map((clip) => clip.id === id ? { ...clip, ...patch } : clip);
-      const updated = clips.find((clip) => clip.id === id)!;
+      const updated = clips.find((clip) => clip.id === id);
+      if (!updated) return previous;
       const timingChanged = patch.timelineStart !== undefined
         || patch.timelineEnd !== undefined
         || patch.clipStart !== undefined
@@ -451,44 +374,39 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             clipDuration: updated.clipDuration,
           } : audio)
         : previous.audioClips;
-      return {
+      return withTimelineMetrics({
         ...previous,
         clips,
         audioClips,
-        totalDuration: getTotalDuration(clips, audioClips),
-        currentClip: previous.currentClip?.id === id
-          ? clips.find((clip) => clip.id === id) ?? null
-          : previous.currentClip,
         isDirty: true,
         canUndo: true,
         canRedo: false,
-      };
+      });
     });
   }, [recordHistory]);
 
   const updateAudioClip = useCallback((id: string, patch: Partial<AudioClip>) => {
-    recordHistory();
-    setState((previous) => {
-      const audioClips = previous.audioClips.map((clip) => clip.id === id ? { ...clip, ...patch } : clip);
-      return {
-        ...previous,
-        audioClips,
-        totalDuration: getTotalDuration(previous.clips, audioClips),
-        isDirty: true,
-        canUndo: true,
-        canRedo: false,
-      };
-    });
+    const current = stateRef.current;
+    const original = current.audioClips.find((clip) => clip.id === id);
+    if (!original || !hasChanges(original, patch)) return;
+    recordHistory(current);
+    setState((previous) => withTimelineMetrics({
+      ...previous,
+      audioClips: previous.audioClips.map((clip) =>
+        clip.id === id ? { ...clip, ...patch } : clip,
+      ),
+      isDirty: true,
+      canUndo: true,
+      canRedo: false,
+    }));
   }, [recordHistory]);
 
-  const bringToFront = useCallback((selection: EditorState["selectedItem"]) => {
-    if (!selection) return;
+  const bringToFront = useCallback((selection: MediaSelection) => {
+    const current = stateRef.current;
     if (selection.type === "video") {
-      const nextZ = Math.max(0, ...stateRef.current.clips.map((clip) => clip.zIndex)) + 1;
-      updateVideoClip(selection.id, { zIndex: nextZ });
+      updateVideoClip(selection.id, { zIndex: getNextZIndex(current.clips) });
     } else {
-      const nextZ = Math.max(0, ...stateRef.current.audioClips.map((clip) => clip.zIndex)) + 1;
-      updateAudioClip(selection.id, { zIndex: nextZ });
+      updateAudioClip(selection.id, { zIndex: getNextZIndex(current.audioClips) });
     }
   }, [updateAudioClip, updateVideoClip]);
 
@@ -496,10 +414,11 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const current = stateRef.current;
     const selection = current.selectedItem;
     if (!selection) return;
-    recordHistory();
+
     if (selection.type === "video") {
       const source = current.clips.find((clip) => clip.id === selection.id);
       if (!source) return;
+      recordHistory(current);
       const id = makeId("video");
       const offset = 250;
       const duplicate: Clip = {
@@ -508,19 +427,20 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         name: `${source.name} copy`,
         timelineStart: source.timelineStart + offset,
         timelineEnd: source.timelineEnd + offset,
-        zIndex: Math.max(0, ...current.clips.map((clip) => clip.zIndex)) + 1,
+        zIndex: getNextZIndex(current.clips),
         transform: { ...source.transform },
       };
+      const nextAudioZIndex = getNextZIndex(current.audioClips);
       const linked = current.audioClips
         .filter((audio) => audio.sourceVideoClipId === source.id)
-        .map((audio) => ({
+        .map((audio, index) => ({
           ...audio,
           id: makeId("audio"),
           sourceVideoClipId: id,
           name: `${audio.name} copy`,
           timelineStart: audio.timelineStart + offset,
           timelineEnd: audio.timelineEnd + offset,
-          zIndex: Math.max(0, ...current.audioClips.map((clip) => clip.zIndex)) + 1,
+          zIndex: nextAudioZIndex + index,
           peaks: [...audio.peaks],
         }));
       updateState({
@@ -531,42 +451,50 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         canUndo: true,
         canRedo: false,
       });
-    } else {
-      const source = current.audioClips.find((clip) => clip.id === selection.id);
-      if (!source) return;
-      const duplicate: AudioClip = {
-        ...source,
-        id: makeId("audio"),
-        name: `${source.name} copy`,
-        timelineStart: source.timelineStart + 250,
-        timelineEnd: source.timelineEnd + 250,
-        zIndex: Math.max(0, ...current.audioClips.map((clip) => clip.zIndex)) + 1,
-        sourceVideoClipId: undefined,
-        peaks: [...source.peaks],
-      };
-      updateState({
-        audioClips: [...current.audioClips, duplicate],
-        selectedItem: { type: "audio", id: duplicate.id },
-        isDirty: true,
-        canUndo: true,
-        canRedo: false,
-      });
+      return;
     }
+
+    const source = current.audioClips.find((clip) => clip.id === selection.id);
+    if (!source) return;
+    recordHistory(current);
+    const duplicate: AudioClip = {
+      ...source,
+      id: makeId("audio"),
+      name: `${source.name} copy`,
+      timelineStart: source.timelineStart + 250,
+      timelineEnd: source.timelineEnd + 250,
+      zIndex: getNextZIndex(current.audioClips),
+      sourceVideoClipId: undefined,
+      peaks: [...source.peaks],
+    };
+    updateState({
+      audioClips: [...current.audioClips, duplicate],
+      selectedItem: { type: "audio", id: duplicate.id },
+      isDirty: true,
+      canUndo: true,
+      canRedo: false,
+    });
   }, [recordHistory, updateState]);
 
   const splitAudioClip = useCallback(() => {
     const current = stateRef.current;
     const selected = current.selectedItem?.type === "audio"
       ? current.audioClips.find((clip) => clip.id === current.selectedItem?.id) ?? null
-      : findActiveAudioClip(current.currentTime, current.audioClips);
+      : getTopTimelineItem(current.currentTime, current.audioClips);
     if (!selected) return;
     const offset = current.currentTime - selected.timelineStart;
-    if (offset < 50 || offset > selected.clipDuration - 50) return;
-    recordHistory();
-    const peakIndex = Math.max(1, Math.round(selected.peaks.length * offset / selected.clipDuration));
+    if (offset < MIN_SPLIT_DURATION_MS
+      || offset > selected.clipDuration - MIN_SPLIT_DURATION_MS) return;
+
+    recordHistory(current);
+    const peakIndex = Math.max(
+      1,
+      Math.round(selected.peaks.length * offset / selected.clipDuration),
+    );
     const first: AudioClip = {
       ...selected,
       id: makeId("audio"),
+      sourceVideoClipId: undefined,
       clipEnd: selected.clipStart + offset,
       clipDuration: offset,
       timelineEnd: current.currentTime,
@@ -575,13 +503,16 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const second: AudioClip = {
       ...selected,
       id: makeId("audio"),
+      sourceVideoClipId: undefined,
       clipStart: selected.clipStart + offset,
       clipDuration: selected.clipDuration - offset,
       timelineStart: current.currentTime,
       peaks: selected.peaks.slice(peakIndex),
     };
     updateState({
-      audioClips: current.audioClips.flatMap((clip) => clip.id === selected.id ? [first, second] : [clip]),
+      audioClips: current.audioClips.flatMap((clip) =>
+        clip.id === selected.id ? [first, second] : [clip],
+      ),
       selectedItem: { type: "audio", id: second.id },
       isDirty: true,
       canUndo: true,
@@ -593,50 +524,70 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const snapshot = historyRef.current.pop();
     if (!snapshot) return;
     futureRef.current.push(captureSnapshot(stateRef.current));
-    setState((previous) => ({
+    setState((previous) => withTimelineMetrics({
       ...previous,
       ...snapshot,
-      totalDuration: getTotalDuration(snapshot.clips, snapshot.audioClips),
-      currentClip: findActiveClip(previous.currentTime, snapshot.clips).clip,
       canUndo: historyRef.current.length > 0,
       canRedo: true,
       isDirty: true,
       isSeeking: true,
     }));
-  }, [captureSnapshot]);
+  }, []);
 
   const redo = useCallback(() => {
     const snapshot = futureRef.current.pop();
     if (!snapshot) return;
     historyRef.current.push(captureSnapshot(stateRef.current));
-    setState((previous) => ({
+    setState((previous) => withTimelineMetrics({
       ...previous,
       ...snapshot,
-      totalDuration: getTotalDuration(snapshot.clips, snapshot.audioClips),
-      currentClip: findActiveClip(previous.currentTime, snapshot.clips).clip,
       canUndo: true,
       canRedo: futureRef.current.length > 0,
       isDirty: true,
       isSeeking: true,
     }));
-  }, [captureSnapshot]);
+  }, []);
 
   const splitClip = useCallback(async () => {
     const current = stateRef.current;
-    const clip = findActiveClip(current.currentTime, current.clips).clip;
-    if (!clip) return;
-    const offset = current.currentTime - clip.timelineStart;
-    if (offset < 50 || offset > clip.clipDuration - 50) return;
-    recordHistory();
-    const sourceSplit = clip.clipStart + offset;
-    updateState({ isGeneratingThumbnails: true });
+    const selected = current.selectedItem?.type === "video"
+      ? current.clips.find((clip) => clip.id === current.selectedItem?.id) ?? null
+      : getTopTimelineItem(current.currentTime, current.clips);
+    if (!selected) return;
+    const offset = current.currentTime - selected.timelineStart;
+    if (offset < MIN_SPLIT_DURATION_MS
+      || offset > selected.clipDuration - MIN_SPLIT_DURATION_MS) return;
+
+    const sourceSplit = selected.clipStart + offset;
+    updateState({ isGeneratingThumbnails: true, mediaError: null });
     try {
       const [firstThumbnail, secondThumbnail] = await Promise.all([
-        createThumbnails(clip.clipURL, { start: clip.clipStart, end: sourceSplit }),
-        createThumbnails(clip.clipURL, { start: sourceSplit, end: clip.clipEnd }),
+        createVideoThumbnailStrip(selected.clipURL, {
+          start: selected.clipStart,
+          end: sourceSplit,
+        }),
+        createVideoThumbnailStrip(selected.clipURL, {
+          start: sourceSplit,
+          end: selected.clipEnd,
+        }),
       ]);
+      const latest = stateRef.current;
+      const latestClip = latest.clips.find((clip) => clip.id === selected.id);
+      if (!latestClip
+        || latestClip.clipStart !== selected.clipStart
+        || latestClip.clipEnd !== selected.clipEnd
+        || latestClip.timelineStart !== selected.timelineStart
+        || latestClip.timelineEnd !== selected.timelineEnd) {
+        updateState({
+          isGeneratingThumbnails: false,
+          mediaError: "The clip changed while it was being split. Please try again.",
+        });
+        return;
+      }
+
+      recordHistory(latest);
       const first: Clip = {
-        ...clip,
+        ...selected,
         id: makeId("video"),
         clipEnd: sourceSplit,
         clipDuration: offset,
@@ -644,18 +595,21 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         thumbnail: firstThumbnail,
       };
       const second: Clip = {
-        ...clip,
+        ...selected,
         id: makeId("video"),
         clipStart: sourceSplit,
-        clipDuration: clip.clipDuration - offset,
+        clipDuration: selected.clipDuration - offset,
         timelineStart: current.currentTime,
         thumbnail: secondThumbnail,
       };
-      const linkedAudio = current.audioClips.filter(
-        (audio) => audio.sourceVideoClipId === clip.id,
+      const linkedAudio = latest.audioClips.filter(
+        (audio) => audio.sourceVideoClipId === selected.id,
       );
       const splitAudio = linkedAudio.flatMap((audio) => {
-        const peakIndex = Math.max(1, Math.round(audio.peaks.length * (offset / clip.clipDuration)));
+        const peakIndex = Math.max(
+          1,
+          Math.round(audio.peaks.length * offset / selected.clipDuration),
+        );
         return [
           {
             ...audio,
@@ -678,17 +632,25 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         ];
       });
       updateState({
-        clips: current.clips.flatMap((item) => item.id === clip.id ? [first, second] : [item]),
-        audioClips: current.audioClips.flatMap((audio) =>
-          audio.sourceVideoClipId === clip.id ? [] : [audio],
-        ).concat(splitAudio),
-        currentClip: second,
+        clips: latest.clips.flatMap((clip) =>
+          clip.id === selected.id ? [first, second] : [clip],
+        ),
+        audioClips: latest.audioClips
+          .filter((audio) => audio.sourceVideoClipId !== selected.id)
+          .concat(splitAudio),
+        effects: latest.effects.flatMap((effect) => effect.clipId === selected.id
+          ? [{ ...effect, clipId: first.id }, { ...effect, clipId: second.id }]
+          : [effect]),
+        selectedItem: { type: "video", id: second.id },
         isGeneratingThumbnails: false,
+        isDirty: true,
+        canUndo: true,
+        canRedo: false,
       });
     } catch (error) {
       updateState({
         isGeneratingThumbnails: false,
-        mediaError: error instanceof Error ? error.message : String(error),
+        mediaError: getErrorMessage(error),
       });
     }
   }, [recordHistory, updateState]);
@@ -701,33 +663,43 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   }, [removeAudioClip, removeVideoClip]);
 
   const saveProject = useCallback(async () => {
+    const snapshot = stateRef.current;
     try {
-      await saveProjectSnapshot(stateRef.current);
-      updateState({ isDirty: false, mediaError: null });
+      await saveProjectSnapshot(snapshot);
+      setState((current) => {
+        const savedStateIsCurrent = current.clips === snapshot.clips
+          && current.audioClips === snapshot.audioClips
+          && current.effects === snapshot.effects
+          && current.projectName === snapshot.projectName;
+        return savedStateIsCurrent
+          ? { ...current, isDirty: false, mediaError: null }
+          : current;
+      });
     } catch (error) {
-      updateState({ mediaError: error instanceof Error ? error.message : String(error) });
+      updateState({ mediaError: getErrorMessage(error) });
     }
   }, [updateState]);
 
   const loadAutosave = useCallback(async () => {
+    if (hasAttemptedAutosaveLoadRef.current) return;
+    hasAttemptedAutosaveLoadRef.current = true;
     try {
       const restored = await loadProjectSnapshot();
       if (!restored || stateRef.current.clips.length || stateRef.current.audioClips.length) return;
-      [...restored.clips, ...restored.audioClips].forEach((clip) => objectUrlsRef.current.add(clip.clipURL));
-      setState((previous) => ({
+      [...restored.clips, ...restored.audioClips]
+        .forEach((clip) => objectUrlsRef.current.add(clip.clipURL));
+      setState((previous) => withTimelineMetrics({
         ...previous,
         projectName: restored.name,
         clips: restored.clips,
         audioClips: restored.audioClips,
-        videoSources: [...new Set(restored.clips.map((clip) => clip.clipURL))],
-        totalDuration: getTotalDuration(restored.clips, restored.audioClips),
-        currentClip: findActiveClip(0, restored.clips).clip,
+        effects: restored.effects,
         currentTime: 0,
         isSeeking: true,
         isDirty: false,
       }));
     } catch (error) {
-      updateState({ mediaError: error instanceof Error ? error.message : String(error) });
+      updateState({ mediaError: getErrorMessage(error) });
     }
   }, [updateState]);
 
@@ -739,7 +711,7 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     if (!state.isDirty) return;
     const timeout = window.setTimeout(() => void saveProject(), 1800);
     return () => window.clearTimeout(timeout);
-  }, [state.audioClips, state.clips, state.Effects, state.isDirty, state.projectName, saveProject]);
+  }, [state.audioClips, state.clips, state.effects, state.isDirty, state.projectName, saveProject]);
 
   useEffect(() => {
     const warnIfDirty = (event: BeforeUnloadEvent) => {
@@ -751,22 +723,55 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return () => window.removeEventListener("beforeunload", warnIfDirty);
   }, []);
 
+  const selectItem = useCallback((selectedItem: MediaSelection | null) => {
+    updateState({ selectedItem });
+  }, [updateState]);
+
+  const setProjectName = useCallback((projectName: string) => {
+    updateState({ projectName, isDirty: true });
+  }, [updateState]);
+
+  const toggleEffect = useCallback((clipId: string, effectName: EffectName) => {
+    const current = stateRef.current;
+    if (!current.clips.some((clip) => clip.id === clipId)) return;
+    recordHistory(current);
+    const exists = current.effects.some(
+      (effect) => effect.clipId === clipId && effect.name === effectName,
+    );
+    updateState({
+      effects: exists
+        ? current.effects.filter(
+            (effect) => effect.clipId !== clipId || effect.name !== effectName,
+          )
+        : [...current.effects, { clipId, name: effectName }],
+      isDirty: true,
+      canUndo: true,
+      canRedo: false,
+    });
+  }, [recordHistory, updateState]);
+
+  const setTimelineZoom = useCallback((zoom: number) => {
+    updateState({ timelineZoom: Math.max(0.25, Math.min(8, zoom)) });
+  }, [updateState]);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.matches("input, textarea, select, [contenteditable='true']")) return;
+      const target = event.target;
+      if (target instanceof HTMLElement
+        && target.matches("input, textarea, select, [contenteditable='true']")) return;
       const modifier = event.ctrlKey || event.metaKey;
-      if (modifier && event.key.toLowerCase() === "z") {
+      const key = event.key.toLowerCase();
+      if (modifier && key === "z") {
         event.preventDefault();
         if (event.shiftKey) redo();
         else undo();
-      } else if (modifier && event.key.toLowerCase() === "y") {
+      } else if (modifier && key === "y") {
         event.preventDefault();
         redo();
-      } else if (modifier && event.key.toLowerCase() === "d") {
+      } else if (modifier && key === "d") {
         event.preventDefault();
         duplicateSelected();
-      } else if (modifier && event.key.toLowerCase() === "s") {
+      } else if (modifier && key === "s") {
         event.preventDefault();
         void saveProject();
       } else if (event.key === "Delete" || event.key === "Backspace") {
@@ -775,7 +780,7 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       } else if (event.key === " ") {
         event.preventDefault();
         updateState({ isPlaying: !stateRef.current.isPlaying });
-      } else if (event.key.toLowerCase() === "s") {
+      } else if (key === "s") {
         event.preventDefault();
         if (stateRef.current.selectedItem?.type === "audio") splitAudioClip();
         else void splitClip();
@@ -783,54 +788,24 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [deleteSelected, duplicateSelected, redo, saveProject, splitAudioClip, splitClip, undo, updateState]);
+  }, [
+    deleteSelected,
+    duplicateSelected,
+    redo,
+    saveProject,
+    splitAudioClip,
+    splitClip,
+    undo,
+    updateState,
+  ]);
 
-  const loadFFmpeg = useCallback(async () => {
-    updateState({ ffmpegStatus: "loading", trimError: null });
-    try {
-      const { getFFmpeg } = await import("../utils/ffmpegService");
-      await getFFmpeg();
-      updateState({ ffmpegStatus: "loaded" });
-    } catch (error) {
-      updateState({ ffmpegStatus: "error", trimError: error instanceof Error ? error.message : String(error) });
-    }
-  }, [updateState]);
-
-  const trimVideo = useCallback(async () => {
-    const current = stateRef.current;
-    if (!current.videoFile || !current.selectedRange) return;
-    updateState({ trimStatus: "trimming", trimProgress: 0, trimError: null });
-    try {
-      const { runTrim } = await import("../utils/ffmpegService");
-      const result = await runTrim({
-        inputFile: current.videoFile,
-        startTime: current.selectedRange.start / 1000,
-        endTime: current.selectedRange.end / 1000,
-        onProgress: (trimProgress) => updateState({ trimProgress }),
-      });
-      if (stateRef.current.lastTrimmedUrl) URL.revokeObjectURL(stateRef.current.lastTrimmedUrl);
-      updateState({ trimStatus: "done", trimProgress: 1, lastTrimmedUrl: result });
-    } catch (error) {
-      updateState({ trimStatus: "error", trimError: error instanceof Error ? error.message : String(error) });
-    }
-  }, [updateState]);
-
-  const setTimelineZoom = useCallback((zoom: number) =>
-    updateState({ timelineZoom: Math.max(0.25, Math.min(8, zoom)) }), [updateState]);
-
-  const value = useMemo<InternalEditorContextType>(() => ({
+  const value = useMemo<EditorContextType>(() => ({
     ...state,
-    _updateState: updateState,
     setVideoFile,
     setAudioFile,
     removeVideoClip,
     removeAudioClip,
-    selectItem: (selectedItem) => updateState({
-      selectedItem,
-      currentClip: selectedItem?.type === "video"
-        ? state.clips.find((clip) => clip.id === selectedItem.id) ?? null
-        : state.currentClip,
-    }),
+    selectItem,
     updateVideoClip,
     updateAudioClip,
     bringToFront,
@@ -839,39 +814,48 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     splitAudioClip,
     undo,
     redo,
+    setProjectName,
     saveProject,
     loadAutosave,
+    setMediaError: (mediaError) => updateState({ mediaError }),
+    toggleEffect,
     setSnapEnabled: (snapEnabled) => updateState({ snapEnabled }),
     setLoopPlayback: (loopPlayback) => updateState({ loopPlayback }),
-    setVideoElement: (videoElement) => updateState({ videoElement }),
-    play: () => state.totalDuration > 0 && updateState({ isPlaying: true }),
+    play: () => {
+      if (stateRef.current.totalDuration > 0) updateState({ isPlaying: true });
+    },
     pause: () => updateState({ isPlaying: false }),
     seek,
-    setSelectedRange: (range: TimeRange | null) => {
-      if (!range) return updateState({ selectedRange: null });
-      updateState({ selectedRange: {
-        start: Math.max(0, Math.min(range.start, state.totalDuration)),
-        end: Math.max(range.start, Math.min(range.end, state.totalDuration)),
-      } });
-    },
+    updatePlayback: updateState,
     splitClip,
     setTimelineZoom,
-    setTimelineScrollPosition: (position) => updateState({ timelineScrollPosition: Math.max(0, position) }),
-    zoomIn: () => setTimelineZoom(state.timelineZoom * 1.25),
-    zoomOut: () => setTimelineZoom(state.timelineZoom / 1.25),
-    resetZoom: () => updateState({ timelineZoom: 1, timelineScrollPosition: 0 }),
-    zoomToFit: () => updateState({ timelineZoom: 1, timelineScrollPosition: 0 }),
-    loadFFmpeg,
-    trimVideo,
-    clearTrimmedVideo: () => {
-      if (state.lastTrimmedUrl) URL.revokeObjectURL(state.lastTrimmedUrl);
-      updateState({ lastTrimmedUrl: null, trimStatus: "idle" });
-    },
-    findActiveClip,
-    findActiveClips: (start, end, clips) => ({
-      clips: clips.filter((clip) => clip.timelineStart < end && clip.timelineEnd > start),
-    }),
-  }), [state, updateState, setVideoFile, setAudioFile, removeVideoClip, removeAudioClip, updateVideoClip, updateAudioClip, bringToFront, duplicateSelected, deleteSelected, splitAudioClip, undo, redo, saveProject, loadAutosave, seek, splitClip, setTimelineZoom, loadFFmpeg, trimVideo]);
+    zoomIn: () => setTimelineZoom(stateRef.current.timelineZoom * 1.25),
+    zoomOut: () => setTimelineZoom(stateRef.current.timelineZoom / 1.25),
+    resetZoom: () => updateState({ timelineZoom: 1 }),
+  }), [
+    state,
+    setVideoFile,
+    setAudioFile,
+    removeVideoClip,
+    removeAudioClip,
+    selectItem,
+    updateVideoClip,
+    updateAudioClip,
+    bringToFront,
+    duplicateSelected,
+    deleteSelected,
+    splitAudioClip,
+    undo,
+    redo,
+    setProjectName,
+    saveProject,
+    loadAutosave,
+    toggleEffect,
+    seek,
+    splitClip,
+    setTimelineZoom,
+    updateState,
+  ]);
 
   return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;
 };
@@ -880,12 +864,5 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 export const useEditor = (): EditorContextType => {
   const context = useContext(EditorContext);
   if (!context) throw new Error("useEditor must be used within an EditorProvider");
-  return context;
-};
-
-// eslint-disable-next-line react-refresh/only-export-components
-export const useEditorInternals = (): InternalEditorContextType => {
-  const context = useContext(EditorContext);
-  if (!context) throw new Error("useEditorInternals must be used within an EditorProvider");
   return context;
 };

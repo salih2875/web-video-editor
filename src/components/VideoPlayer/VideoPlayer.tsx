@@ -1,9 +1,12 @@
 import React, { memo, useCallback, useEffect, useRef, useState } from "react";
-import { Application, Filter, Sprite, Texture } from "pixi.js";
-import { useEditor, useEditorInternals } from "../../context/EditorContext";
-import type { AudioClip, Clip, Effect } from "../../types/editor";
+import { Application, Sprite, Texture, filters } from "pixi.js";
+import { useEditor } from "../../context/EditorContext";
+import type { AudioClip, Clip, Effect, EffectName } from "../../types/editor";
 import styles from "./VideoPlayer.module.css";
-import { getTopTimelineItem } from "../../utils/timelineMath";
+import {
+  getTopAudibleTimelineItem,
+  getTopTimelineItem,
+} from "../../utils/timelineMath";
 
 interface PlaybackSnapshot {
   clips: Clip[];
@@ -14,6 +17,9 @@ interface PlaybackSnapshot {
   isPlaying: boolean;
   loopPlayback: boolean;
 }
+
+const createFilter = (effectName: EffectName) =>
+  effectName === "Blur" ? new filters.BlurFilter() : new filters.NoiseFilter();
 
 const HiddenVideo = memo(({
   clip,
@@ -49,14 +55,14 @@ const HiddenAudio = memo(({
 }) => {
   const setRef = useCallback((element: HTMLAudioElement | null) =>
     register(clip.id, element), [clip.id, register]);
-  return <audio ref={setRef} src={clip.clipURL} preload="auto" data-clip-id={clip.id} data-name={clip.name} data-z-index={clip.zIndex} data-timeline-start={clip.timelineStart} />;
+  return <audio ref={setRef} src={clip.clipURL} preload="auto" />;
 });
 
 export const VideoPlayer: React.FC = () => {
   const {
     clips,
     audioClips,
-    Effects,
+    effects,
     totalDuration,
     currentTime,
     isPlaying,
@@ -65,8 +71,8 @@ export const VideoPlayer: React.FC = () => {
     play,
     pause,
     seek,
+    updatePlayback,
   } = useEditor();
-  const { _updateState, findActiveClip } = useEditorInternals();
   const pixiHostRef = useRef<HTMLDivElement>(null);
   const videoRefs = useRef(new Map<string, HTMLVideoElement>());
   const audioRefs = useRef(new Map<string, HTMLAudioElement>());
@@ -74,13 +80,14 @@ export const VideoPlayer: React.FC = () => {
   const spriteRefs = useRef(new Map<string, Sprite>());
   const appRef = useRef<Application | null>(null);
   const visibleClipIdRef = useRef<string | null>(null);
+  const effectSignatureRefs = useRef(new Map<string, string>());
   const frameRef = useRef<number | null>(null);
   const [isBuffering, setIsBuffering] = useState(false);
   const clockRef = useRef({ timelineTime: 0, lastTimestamp: 0, lastUiUpdate: 0 });
   const snapshotRef = useRef<PlaybackSnapshot>({
     clips,
     audioClips,
-    effects: Effects,
+    effects,
     totalDuration,
     currentTime,
     isPlaying,
@@ -89,7 +96,7 @@ export const VideoPlayer: React.FC = () => {
   snapshotRef.current = {
     clips,
     audioClips,
-    effects: Effects,
+    effects,
     totalDuration,
     currentTime,
     isPlaying,
@@ -102,10 +109,18 @@ export const VideoPlayer: React.FC = () => {
       return;
     }
     videoRefs.current.delete(id);
+    const sprite = spriteRefs.current.get(id);
+    if (sprite) {
+      sprite.parent?.removeChild(sprite);
+      sprite.filters = null;
+      sprite.destroy();
+    }
     spriteRefs.current.delete(id);
     const texture = textureRefs.current.get(id);
     if (texture) texture.destroy(true);
     textureRefs.current.delete(id);
+    effectSignatureRefs.current.delete(id);
+    if (visibleClipIdRef.current === id) visibleClipIdRef.current = null;
   }, []);
 
   const registerAudio = useCallback((id: string, element: HTMLAudioElement | null) => {
@@ -147,9 +162,14 @@ export const VideoPlayer: React.FC = () => {
     sprite.x = app.screen.width / 2 + clip.transform.x;
     sprite.y = app.screen.height / 2 + clip.transform.y;
     sprite.rotation = clip.transform.rotation * Math.PI / 180;
-    sprite.filters = snapshotRef.current.effects
-      .filter((effect) => effect.id === clip.id)
-      .map((effect) => effect.filter as Filter<Record<string, unknown>>);
+    const effectNames = snapshotRef.current.effects
+      .filter((effect) => effect.clipId === clip.id)
+      .map((effect) => effect.name);
+    const effectSignature = effectNames.join(",");
+    if (effectSignatureRefs.current.get(clip.id) !== effectSignature) {
+      sprite.filters = effectNames.map(createFilter);
+      effectSignatureRefs.current.set(clip.id, effectSignature);
+    }
     if (visibleClipIdRef.current !== clip.id) {
       app.stage.removeChildren();
       app.stage.addChild(sprite);
@@ -160,7 +180,7 @@ export const VideoPlayer: React.FC = () => {
 
   const handleVideoReady = useCallback((id: string) => {
     const snapshot = snapshotRef.current;
-    const active = findActiveClip(snapshot.currentTime, snapshot.clips).clip;
+    const active = getTopTimelineItem(snapshot.currentTime, snapshot.clips);
     if (!active || active.id !== id) return;
     const video = videoRefs.current.get(id);
     if (!video) return;
@@ -170,13 +190,14 @@ export const VideoPlayer: React.FC = () => {
     }
     renderVideo(active);
     if (snapshot.isPlaying && video.paused) void video.play().catch(() => undefined);
-  }, [findActiveClip, renderVideo]);
+  }, [renderVideo]);
 
   useEffect(() => {
     const host = pixiHostRef.current;
     if (!host) return;
     const textures = textureRefs.current;
     const sprites = spriteRefs.current;
+    const effectSignatures = effectSignatureRefs.current;
     const app = new Application({
       width: 1280,
       height: 720,
@@ -185,7 +206,11 @@ export const VideoPlayer: React.FC = () => {
       autoStart: false,
       preserveDrawingBuffer: true,
     });
-    const canvas = app.view as HTMLCanvasElement;
+    const canvas = app.view;
+    if (!(canvas instanceof HTMLCanvasElement)) {
+      app.destroy(true, { children: true });
+      return;
+    }
     canvas.className = styles.canvas;
     host.appendChild(canvas);
     appRef.current = app;
@@ -193,6 +218,7 @@ export const VideoPlayer: React.FC = () => {
       textures.forEach((texture) => texture.destroy(true));
       textures.clear();
       sprites.clear();
+      effectSignatures.clear();
       app.destroy(true, { children: true });
       appRef.current = null;
     };
@@ -200,8 +226,8 @@ export const VideoPlayer: React.FC = () => {
 
   const syncMedia = useCallback((timelineTime: number, shouldPlay: boolean) => {
     const snapshot = snapshotRef.current;
-    const activeVideo = findActiveClip(timelineTime, snapshot.clips).clip;
-    const activeAudio = getTopTimelineItem(timelineTime, snapshot.audioClips);
+    const activeVideo = getTopTimelineItem(timelineTime, snapshot.clips);
+    const activeAudio = getTopAudibleTimelineItem(timelineTime, snapshot.audioClips);
     let videoReady = !activeVideo;
 
     snapshot.clips.forEach((clip) => {
@@ -249,7 +275,7 @@ export const VideoPlayer: React.FC = () => {
       if (!shouldPlay && !audio.paused) audio.pause();
     });
     return videoReady;
-  }, [findActiveClip, renderVideo]);
+  }, [renderVideo]);
 
   const playbackFrame = useCallback((timestamp: number) => {
     const snapshot = snapshotRef.current;
@@ -264,9 +290,8 @@ export const VideoPlayer: React.FC = () => {
       clockRef.current.timelineTime = 0;
       clockRef.current.lastTimestamp = timestamp;
       syncMedia(0, snapshot.loopPlayback);
-      _updateState({
+      updatePlayback({
         currentTime: 0,
-        currentClip: findActiveClip(0, snapshot.clips).clip,
         isSeeking: false,
         isPlaying: snapshot.loopPlayback,
       });
@@ -274,13 +299,12 @@ export const VideoPlayer: React.FC = () => {
     } else if (timestamp - clockRef.current.lastUiUpdate >= 32) {
       clockRef.current.lastUiUpdate = timestamp;
       const nextTime = clockRef.current.timelineTime;
-      _updateState({
+      updatePlayback({
         currentTime: nextTime,
-        currentClip: findActiveClip(nextTime, snapshot.clips).clip,
       });
     }
     frameRef.current = requestAnimationFrame(playbackFrame);
-  }, [_updateState, findActiveClip, syncMedia]);
+  }, [syncMedia, updatePlayback]);
 
   useEffect(() => {
     const timelineTime = snapshotRef.current.currentTime >= totalDuration && totalDuration > 0
@@ -302,11 +326,10 @@ export const VideoPlayer: React.FC = () => {
     const seekTime = totalDuration > 0 ? Math.min(currentTime, totalDuration) : 0;
     clockRef.current.timelineTime = seekTime;
     syncMedia(seekTime, isPlaying);
-    _updateState({
+    updatePlayback({
       isSeeking: false,
-      currentClip: findActiveClip(seekTime, clips).clip,
     });
-  }, [clips, currentTime, findActiveClip, isPlaying, isSeeking, syncMedia, totalDuration, _updateState]);
+  }, [currentTime, isPlaying, isSeeking, syncMedia, totalDuration, updatePlayback]);
 
   const beginPlayback = useCallback(async () => {
     const media = [...videoRefs.current.values(), ...audioRefs.current.values()];

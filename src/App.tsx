@@ -49,7 +49,7 @@ const EditorShell: React.FC = () => {
         <div className="editor-main-right">
           <Suspense fallback={<div className="panel-loading">Loading panel…</div>}>
             {activePanel === "properties" && <PropertiesPanel />}
-            {activePanel === "effects" && <EffectsPanel show />}
+            {activePanel === "effects" && <EffectsPanel />}
             {activePanel === "export" && <ExportPanel />}
           </Suspense>
         </div>

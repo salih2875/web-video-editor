@@ -1,5 +1,6 @@
 import React from "react";
 import { useEditor } from "../../context/EditorContext";
+import { getTopTimelineItem } from "../../utils/timelineMath";
 import styles from "./ControlPanel.module.css";
 
 export const ControlPanel: React.FC = () => {
@@ -14,11 +15,19 @@ export const ControlPanel: React.FC = () => {
     deleteSelected,
     isGeneratingThumbnails,
   } = useEditor();
-  const selectedVideo = selectedItem?.type === "video" ? clips.find((clip) => clip.id === selectedItem.id) : null;
-  const selectedAudio = selectedItem?.type === "audio" ? audioClips.find((clip) => clip.id === selectedItem.id) : null;
-  const activeVideo = selectedVideo ?? clips.find((clip) => currentTime > clip.timelineStart + 50 && currentTime < clip.timelineEnd - 50);
-  const activeAudio = selectedAudio ?? audioClips.find((clip) => currentTime > clip.timelineStart + 50 && currentTime < clip.timelineEnd - 50);
-  const canSplit = selectedItem?.type === "audio" ? Boolean(activeAudio) : Boolean(activeVideo);
+  const selectedVideo = selectedItem?.type === "video"
+    ? clips.find((clip) => clip.id === selectedItem.id) ?? null
+    : null;
+  const selectedAudio = selectedItem?.type === "audio"
+    ? audioClips.find((clip) => clip.id === selectedItem.id) ?? null
+    : null;
+  const splitTarget = selectedItem?.type === "audio"
+    ? selectedAudio
+    : selectedVideo ?? getTopTimelineItem(currentTime, clips);
+  const splitOffset = splitTarget ? currentTime - splitTarget.timelineStart : 0;
+  const canSplit = Boolean(
+    splitTarget && splitOffset >= 50 && splitOffset <= splitTarget.clipDuration - 50,
+  );
 
   return (
     <div className={styles.controlPanel}>

@@ -1,8 +1,3 @@
-export interface TimeRange {
-  start: number;
-  end: number;
-}
-
 export interface Clip {
   id: string;
   name: string;
@@ -15,7 +10,6 @@ export interface Clip {
   timelineStart: number;
   timelineEnd: number;
   thumbnail: HTMLCanvasElement | null;
-  effects: string[];
   transform: VideoTransform;
 }
 
@@ -50,31 +44,22 @@ export type MediaSelection =
   | { type: "video"; id: string }
   | { type: "audio"; id: string };
 
+export type EffectName = "Blur" | "Noise";
+
 export interface Effect {
-  id: string;
-  name: string;
-  filter: unknown;
+  clipId: string;
+  name: EffectName;
 }
 
-export type FfmpegStatus = "idle" | "loading" | "loaded" | "error";
-export type TrimStatus = "idle" | "trimming" | "error" | "done";
-
 export interface EditorState {
-  videoFile: File | null;
-  audioFile: File | null;
-  videoSources: string[];
-  videoElement: HTMLVideoElement | null;
   clips: Clip[];
   audioClips: AudioClip[];
-  Effects: Effect[];
-  currentClip: Clip | null;
+  effects: Effect[];
   selectedItem: MediaSelection | null;
-  duration: number;
   totalDuration: number;
   currentTime: number;
   isPlaying: boolean;
   isSeeking: boolean;
-  selectedRange: TimeRange | null;
   isGeneratingThumbnails: boolean;
   isLoadingAudio: boolean;
   mediaError: string | null;
@@ -85,12 +70,6 @@ export interface EditorState {
   snapEnabled: boolean;
   loopPlayback: boolean;
   timelineZoom: number;
-  timelineScrollPosition: number;
-  ffmpegStatus: FfmpegStatus;
-  trimStatus: TrimStatus;
-  trimProgress: number;
-  lastTrimmedUrl: string | null;
-  trimError: string | null;
 }
 
 export interface EditorContextType extends EditorState {
@@ -107,33 +86,20 @@ export interface EditorContextType extends EditorState {
   splitAudioClip: () => void;
   undo: () => void;
   redo: () => void;
+  setProjectName: (name: string) => void;
   saveProject: () => Promise<void>;
   loadAutosave: () => Promise<void>;
+  setMediaError: (message: string | null) => void;
+  toggleEffect: (clipId: string, effectName: EffectName) => void;
   setSnapEnabled: (enabled: boolean) => void;
   setLoopPlayback: (enabled: boolean) => void;
-  setVideoElement: (element: HTMLVideoElement | null) => void;
   play: () => void;
   pause: () => void;
   seek: (time: number) => void;
-  setSelectedRange: (range: TimeRange | null) => void;
+  updatePlayback: (patch: Partial<Pick<EditorState, "currentTime" | "isPlaying" | "isSeeking">>) => void;
   splitClip: () => Promise<void>;
   setTimelineZoom: (zoom: number) => void;
-  setTimelineScrollPosition: (position: number) => void;
   zoomIn: () => void;
   zoomOut: () => void;
   resetZoom: () => void;
-  zoomToFit: () => void;
-  loadFFmpeg: () => Promise<void>;
-  trimVideo: () => Promise<void>;
-  clearTrimmedVideo: () => void;
 }
-
-export type InternalEditorContextType = EditorContextType & {
-  _updateState: (newState: Partial<EditorState>) => void;
-  findActiveClip: (time: number, clips: Clip[]) => { clip: Clip | null };
-  findActiveClips: (
-    timeBegin: number,
-    timeEnd: number,
-    clips: Clip[],
-  ) => { clips: Clip[] };
-};

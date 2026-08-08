@@ -7,16 +7,15 @@ import styles from "./Timeline.module.css";
 import { snapToPoints } from "../../utils/timelineMath";
 
 const ClipCanvas = memo(({ canvas }: { canvas: HTMLCanvasElement | null }) => {
-  const hostRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
-    const host = hostRef.current;
-    if (!host || !canvas) return;
-    host.replaceChildren(canvas);
-    canvas.style.width = "100%";
-    canvas.style.height = "100%";
-    return () => { if (host.contains(canvas)) host.removeChild(canvas); };
+    const target = canvasRef.current;
+    if (!target || !canvas) return;
+    target.width = canvas.width;
+    target.height = canvas.height;
+    target.getContext("2d")?.drawImage(canvas, 0, 0);
   }, [canvas]);
-  return <div ref={hostRef} className={styles.thumbnailCanvas} />;
+  return <canvas ref={canvasRef} className={styles.thumbnailCanvas} />;
 });
 
 const Waveform = memo(({ peaks }: { peaks: number[] }) => (
@@ -27,6 +26,7 @@ const Waveform = memo(({ peaks }: { peaks: number[] }) => (
 
 type DragTarget = MediaSelection;
 type TrimEdge = "start" | "end";
+const keepTime = (time: number) => time;
 
 export const Timeline: React.FC = () => {
   const editor = useEditor();
@@ -41,11 +41,9 @@ export const Timeline: React.FC = () => {
     isGeneratingThumbnails,
     isLoadingAudio,
     setTimelineZoom,
-    setTimelineScrollPosition,
     zoomIn,
     zoomOut,
     resetZoom,
-    zoomToFit,
     seek,
     selectItem,
     updateVideoClip,
@@ -76,17 +74,24 @@ export const Timeline: React.FC = () => {
   const contentWidth = Math.max(viewportWidth, viewportWidth * timelineZoom);
   const displayDuration = Math.max(totalDuration, 1000);
   const percent = useCallback((time: number) => time / displayDuration * 100, [displayDuration]);
-  const laneValues = useMemo(() => [...new Set(audioClips.map((clip) => clip.zIndex))].sort((a, b) => b - a), [audioClips]);
-  const laneFor = useCallback((clip: AudioClip) => Math.max(0, laneValues.indexOf(clip.zIndex)), [laneValues]);
-  const audioTrackHeight = Math.max(70, laneValues.length * 58 + 8);
+  const laneByZIndex = useMemo(() => new Map(
+    [...new Set(audioClips.map((clip) => clip.zIndex))]
+      .sort((a, b) => b - a)
+      .map((zIndex, lane) => [zIndex, lane]),
+  ), [audioClips]);
+  const laneFor = useCallback(
+    (clip: AudioClip) => laneByZIndex.get(clip.zIndex) ?? 0,
+    [laneByZIndex],
+  );
+  const audioTrackHeight = Math.max(70, laneByZIndex.size * 58 + 8);
 
-  const snapTime = useCallback((candidate: number, target: DragTarget) => {
-    if (!snapEnabled) return candidate;
+  const createSnapper = useCallback((target: DragTarget) => {
+    if (!snapEnabled) return keepTime;
     const threshold = displayDuration / Math.max(1, contentWidth) * 9;
     const points = [0, currentTime];
     clips.forEach((clip) => { if (target.type !== "video" || clip.id !== target.id) points.push(clip.timelineStart, clip.timelineEnd); });
     audioClips.forEach((clip) => { if (target.type !== "audio" || clip.id !== target.id) points.push(clip.timelineStart, clip.timelineEnd); });
-    return snapToPoints(candidate, points, threshold);
+    return (candidate: number) => snapToPoints(candidate, points, threshold);
   }, [audioClips, clips, contentWidth, currentTime, displayDuration, snapEnabled]);
 
   const handleSeek = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
@@ -110,17 +115,18 @@ export const Timeline: React.FC = () => {
     const originalStart = source.timelineStart;
     const duration = source.timelineEnd - source.timelineStart;
     const rect = timelineRef.current.getBoundingClientRect();
+    const snapTime = createSnapper(target);
     let moved = false;
     let newStart = originalStart;
-    const lane = target.type === "audio" ? laneFor(source as AudioClip) : 0;
+    const lane = target.type === "audio" ? laneByZIndex.get(source.zIndex) ?? 0 : 0;
 
     const onMove = (moveEvent: MouseEvent) => {
       const deltaX = moveEvent.clientX - startX;
       if (Math.abs(deltaX) > 3) moved = true;
       if (!moved) return;
       const rawStart = Math.max(0, originalStart + deltaX / rect.width * displayDuration);
-      const snappedStart = snapTime(rawStart, target);
-      const snappedEnd = snapTime(rawStart + duration, target) - duration;
+      const snappedStart = snapTime(rawStart);
+      const snappedEnd = snapTime(rawStart + duration) - duration;
       newStart = Math.max(0,
         Math.abs(snappedStart - rawStart) <= Math.abs(snappedEnd - rawStart) ? snappedStart : snappedEnd,
       );
@@ -137,7 +143,7 @@ export const Timeline: React.FC = () => {
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp, { once: true });
-  }, [displayDuration, getTarget, laneFor, percent, seek, selectItem, snapTime, updateAudioClip, updateVideoClip]);
+  }, [createSnapper, displayDuration, getTarget, laneByZIndex, percent, seek, selectItem, updateAudioClip, updateVideoClip]);
 
   const startTrim = useCallback((event: React.MouseEvent, target: DragTarget, edge: TrimEdge) => {
     event.stopPropagation();
@@ -147,23 +153,24 @@ export const Timeline: React.FC = () => {
     selectItem(target);
     const startX = event.clientX;
     const rect = timelineRef.current.getBoundingClientRect();
+    const snapTime = createSnapper(target);
     let timelineStart = source.timelineStart;
     let timelineEnd = source.timelineEnd;
     let clipStart = source.clipStart;
     let clipEnd = source.clipEnd;
-    const lane = target.type === "audio" ? laneFor(source as AudioClip) : 0;
+    const lane = target.type === "audio" ? laneByZIndex.get(source.zIndex) ?? 0 : 0;
 
     const onMove = (moveEvent: MouseEvent) => {
       const delta = (moveEvent.clientX - startX) / rect.width * displayDuration;
       if (edge === "start") {
         const minimum = Math.max(0, source.timelineStart - source.clipStart);
         const maximum = source.timelineEnd - 100;
-        timelineStart = Math.max(minimum, Math.min(maximum, snapTime(source.timelineStart + delta, target)));
+        timelineStart = Math.max(minimum, Math.min(maximum, snapTime(source.timelineStart + delta)));
         clipStart = source.clipStart + timelineStart - source.timelineStart;
       } else {
         const minimum = source.timelineStart + 100;
         const maximum = source.timelineEnd + (source.sourceDuration - source.clipEnd);
-        timelineEnd = Math.max(minimum, Math.min(maximum, snapTime(source.timelineEnd + delta, target)));
+        timelineEnd = Math.max(minimum, Math.min(maximum, snapTime(source.timelineEnd + delta)));
         clipEnd = source.clipEnd + timelineEnd - source.timelineEnd;
       }
       setDragPreview({
@@ -189,23 +196,23 @@ export const Timeline: React.FC = () => {
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp, { once: true });
-  }, [displayDuration, getTarget, laneFor, percent, selectItem, snapTime, updateAudioClip, updateVideoClip]);
+  }, [createSnapper, displayDuration, getTarget, laneByZIndex, percent, selectItem, updateAudioClip, updateVideoClip]);
 
   const hasMedia = clips.length > 0 || audioClips.length > 0;
   return (
     <div className={styles.timelineWrapper} ref={wrapperRef}>
       <div className={styles.timelineToolbar}>
-        <ZoomControls zoomLevel={timelineZoom} minZoom={0.25} maxZoom={8} onZoomIn={zoomIn} onZoomOut={zoomOut} onZoomReset={resetZoom} onZoomToFit={zoomToFit} onZoomChange={setTimelineZoom} />
+        <ZoomControls zoomLevel={timelineZoom} minZoom={0.25} maxZoom={8} onZoomIn={zoomIn} onZoomOut={zoomOut} onZoomReset={resetZoom} onZoomChange={setTimelineZoom} />
         <button onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)">↶</button>
         <button onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Y)">↷</button>
         <label><input type="checkbox" checked={snapEnabled} onChange={(event) => setSnapEnabled(event.target.checked)} /> Snap</label>
       </div>
-      <div className={styles.scrollContainer} ref={scrollRef} onScroll={(event) => setTimelineScrollPosition(event.currentTarget.scrollLeft)} onWheel={(event) => {
+      <div className={styles.scrollContainer} ref={scrollRef} onWheel={(event) => {
         if (event.ctrlKey || event.metaKey) { event.preventDefault(); if (event.deltaY < 0) zoomIn(); else zoomOut(); }
         else if (scrollRef.current) scrollRef.current.scrollLeft += event.deltaY;
       }}>
         <div className={styles.timelineContent} style={{ width: contentWidth }}>
-          <TimelineRuler duration={displayDuration} zoomLevel={timelineZoom} width={contentWidth} onTimeClick={(time) => seek(Math.min(time, totalDuration))} />
+          <TimelineRuler duration={displayDuration} width={contentWidth} onTimeClick={(time) => seek(Math.min(time, totalDuration))} />
           <div className={styles.tracks} ref={timelineRef} onMouseDown={handleSeek}>
             <div className={`${styles.track} ${styles.videoTrack}`}>
               <span className={styles.trackLabel}>VIDEO · highest layer plays</span>

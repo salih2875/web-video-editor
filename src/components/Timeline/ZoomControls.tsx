@@ -8,8 +8,7 @@ export interface ZoomControlsProps {
   onZoomIn: () => void;
   onZoomOut: () => void;
   onZoomReset: () => void;
-  onZoomToFit: () => void;
-  onZoomChange?: (zoom: number) => void;
+  onZoomChange: (zoom: number) => void;
 }
 
 export const ZoomControls: React.FC<ZoomControlsProps> = ({
@@ -19,7 +18,6 @@ export const ZoomControls: React.FC<ZoomControlsProps> = ({
   onZoomIn,
   onZoomOut,
   onZoomReset,
-  onZoomToFit,
   onZoomChange,
 }) => {
   const zoomPercentage = Math.round(zoomLevel * 100);
@@ -56,17 +54,6 @@ export const ZoomControls: React.FC<ZoomControlsProps> = ({
         
         <button
           className={styles.zoomButton}
-          onClick={onZoomToFit}
-          title="Zoom to Fit"
-          aria-label="Zoom to Fit"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M9 9H3V7h6v2zm0 4H3v-2h6v2zm0 4H3v-2h6v2zm8-12h-6v2h6V5zm0 4h-6v2h6V9zm0 4h-6v2h6v-2zm0 4h-6v2h6v-2z"/>
-          </svg>
-        </button>
-        
-        <button
-          className={styles.zoomButton}
           onClick={onZoomIn}
           disabled={zoomLevel >= maxZoom}
           title="Zoom In"
@@ -83,11 +70,11 @@ export const ZoomControls: React.FC<ZoomControlsProps> = ({
           type="range"
           min={minZoom}
           max={maxZoom}
-          step={0.1}
+          step={0.05}
           value={zoomLevel}
           onChange={(e) => {
             const newZoom = parseFloat(e.target.value);
-            onZoomChange?.(newZoom);
+            onZoomChange(newZoom);
           }}
           className={styles.slider}
           title={`Zoom: ${zoomPercentage}%`}

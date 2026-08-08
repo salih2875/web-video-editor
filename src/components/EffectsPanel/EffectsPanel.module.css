@@ -15,14 +15,25 @@
 }
 
 .effectItem {
+  display: block;
+  width: 100%;
   padding: 8px;
   margin-bottom: 5px;
+  border: 0;
   background-color: #3a3a3a;
+  color: inherit;
+  text-align: left;
   border-radius: 4px;
   cursor: pointer;
   transition: background-color 0.2s;
 }
 
-.effectItem:hover {
+.effectItem:hover:not(:disabled),
+.effectItem[aria-pressed="true"] {
   background-color: #505050;
+}
+
+.effectItem:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
