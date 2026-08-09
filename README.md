@@ -9,7 +9,7 @@ A browser-based timeline editor built with React, TypeScript, PixiJS, and FFmpeg
 - Adjust video transforms and audio volume, fades, and priority
 - Preview blur and noise effects with PixiJS
 - Autosave projects in IndexedDB
-- Export the timeline to MP4 in the browser
+- Export PIXI-rendered frames to MP4 with WebCodecs and FFmpeg.wasm audio muxing
 
 ## Development
 
@@ -20,7 +20,7 @@ npm install
 npm run dev
 ```
 
-Vite serves the cross-origin isolation headers required by FFmpeg WebAssembly. Use the development or preview server instead of opening `index.html` directly.
+Vite serves the cross-origin isolation headers required by FFmpeg WebAssembly. Use the development or preview server instead of opening `index.html` directly. Export also requires browser support for WebCodecs H.264 encoding.
 
 ## Validation
 

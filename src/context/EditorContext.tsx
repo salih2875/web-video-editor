@@ -19,6 +19,7 @@ import type {
 import { loadProjectSnapshot, saveProjectSnapshot } from "../utils/projectStorage";
 import {
   createAudioPeaks,
+  createAudioPeaksIfPresent,
   createVideoThumbnailStrip,
   getMediaDuration,
 } from "../utils/mediaProcessing";
@@ -162,7 +163,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
       const [clipDuration, thumbnail, peaks] = await Promise.all([
         getMediaDuration(url, "video"),
         createVideoThumbnailStrip(url),
-        createAudioPeaks(file),
+        createAudioPeaksIfPresent(file),
       ]);
       recordHistory();
       setState((previous) => {
@@ -185,7 +186,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
           thumbnail,
           transform: { ...DEFAULT_TRANSFORM },
         };
-        const soundtrack: AudioClip = {
+        const soundtrack: AudioClip | null = peaks ? {
           id: makeId("audio"),
           name: `${file.name} · soundtrack`,
           zIndex: getNextZIndex(previous.audioClips),
@@ -202,11 +203,13 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
           fadeIn: 0,
           fadeOut: 0,
           sourceVideoClipId: id,
-        };
+        } : null;
         return withTimelineMetrics({
           ...previous,
           clips: [...previous.clips, clip],
-          audioClips: [...previous.audioClips, soundtrack],
+          audioClips: soundtrack
+            ? [...previous.audioClips, soundtrack]
+            : previous.audioClips,
           isGeneratingThumbnails: false,
           selectedItem: { type: "video", id },
           isDirty: true,

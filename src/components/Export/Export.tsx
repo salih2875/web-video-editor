@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useEditor } from "../../context/EditorContext";
+import type { ExportPhase } from "../../utils/pixiExportService";
 import styles from "./Export.module.css";
 
 type Quality = "low" | "medium" | "high";
@@ -12,6 +13,16 @@ const PRESETS: Record<Quality, { width: number; height: number; framerate: numbe
 
 const isQuality = (value: string): value is Quality => value in PRESETS;
 
+const PHASE_LABELS: Record<ExportPhase, string> = {
+  preparing: "Preparing PIXI renderer…",
+  rendering: "Rendering and encoding PIXI frames…",
+  "loading-engine": "Loading local export engine…",
+  transferring: "Preparing encoded media…",
+  "mixing-audio": "Rendering timeline audio…",
+  muxing: "Muxing audio and video…",
+  finalizing: "Finalizing MP4…",
+};
+
 export const Export = () => {
   const { clips, audioClips, effects, totalDuration } = useEditor();
   const [quality, setQuality] = useState<Quality>("medium");
@@ -19,19 +30,31 @@ export const Export = () => {
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => () => {
     if (downloadUrl) URL.revokeObjectURL(downloadUrl);
   }, [downloadUrl]);
 
   const startExport = async () => {
-    if (!totalDuration || !clips.length || isExporting) return;
+    if (!totalDuration || !clips.length || isExporting || abortControllerRef.current) return;
     setDownloadUrl(null);
     setIsExporting(true);
     setProgress(0);
-    setStatus("Loading export engine…");
+    setStatus("Preparing PIXI renderer…");
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
     try {
-      const { exportTimeline } = await import("../../utils/ffmpegService");
+      const { exportTimeline } = await import("../../utils/pixiExportService");
       const url = await exportTimeline({
         clips,
         audioClips,
@@ -39,18 +62,29 @@ export const Export = () => {
         duration: totalDuration,
         ...PRESETS[quality],
         quality,
-        onProgress: (value) => {
+        signal: abortController.signal,
+        onProgress: (value, phase) => {
           const percentage = Math.round(value * 100);
           setProgress(percentage);
-          setStatus(`Rendering video and audio… ${percentage}%`);
+          setStatus(`${PHASE_LABELS[phase]} ${percentage}%`);
         },
       });
+      if (!isMountedRef.current) {
+        URL.revokeObjectURL(url);
+        return;
+      }
       setDownloadUrl(url);
+      setProgress(100);
       setStatus("Export complete");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
+      if (!isMountedRef.current) return;
+      setProgress(0);
+      setStatus(error instanceof DOMException && error.name === "AbortError"
+        ? "Export cancelled"
+        : error instanceof Error ? error.message : String(error));
     } finally {
-      setIsExporting(false);
+      if (abortControllerRef.current === abortController) abortControllerRef.current = null;
+      if (isMountedRef.current) setIsExporting(false);
     }
   };
 
@@ -58,8 +92,8 @@ export const Export = () => {
     <div className={styles.exportContainer}>
       <h3>Export MP4</h3>
       <p>
-        Exports the visible highest video layer and highest-priority audio, including trims,
-        volume, fades, effects, and timeline positions.
+        Uses the same PIXI renderer as preview for the visible highest video layer, then
+        preserves trims, priority, volume, and fades while muxing audio.
       </p>
       <div className={styles.configPanel}>
         <div className={styles.configGroup}>
@@ -79,10 +113,15 @@ export const Export = () => {
         </div>
         <button
           className={styles.exportButton}
-          onClick={() => void startExport()}
-          disabled={isExporting || !clips.length}
+          onClick={isExporting
+            ? () => {
+                setStatus("Cancelling export…");
+                abortControllerRef.current?.abort();
+              }
+            : () => void startExport()}
+          disabled={!clips.length}
         >
-          {isExporting ? "Exporting…" : "Start audio + video export"}
+          {isExporting ? "Cancel export" : "Start audio + video export"}
         </button>
       </div>
       {(isExporting || status) && (

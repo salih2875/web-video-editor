@@ -1,7 +1,11 @@
 import React, { memo, useCallback, useEffect, useRef, useState } from "react";
-import { Application, Sprite, Texture, filters } from "pixi.js";
 import { useEditor } from "../../context/EditorContext";
-import type { AudioClip, Clip, Effect, EffectName } from "../../types/editor";
+import type { AudioClip, Clip, Effect } from "../../types/editor";
+import {
+  PixiTimelineRenderer,
+  PREVIEW_HEIGHT,
+  PREVIEW_WIDTH,
+} from "../../rendering/PixiTimelineRenderer";
 import styles from "./VideoPlayer.module.css";
 import {
   getTopAudibleTimelineItem,
@@ -17,9 +21,6 @@ interface PlaybackSnapshot {
   isPlaying: boolean;
   loopPlayback: boolean;
 }
-
-const createFilter = (effectName: EffectName) =>
-  effectName === "Blur" ? new filters.BlurFilter() : new filters.NoiseFilter();
 
 const HiddenVideo = memo(({
   clip,
@@ -76,11 +77,7 @@ export const VideoPlayer: React.FC = () => {
   const pixiHostRef = useRef<HTMLDivElement>(null);
   const videoRefs = useRef(new Map<string, HTMLVideoElement>());
   const audioRefs = useRef(new Map<string, HTMLAudioElement>());
-  const textureRefs = useRef(new Map<string, Texture>());
-  const spriteRefs = useRef(new Map<string, Sprite>());
-  const appRef = useRef<Application | null>(null);
-  const visibleClipIdRef = useRef<string | null>(null);
-  const effectSignatureRefs = useRef(new Map<string, string>());
+  const rendererRef = useRef<PixiTimelineRenderer | null>(null);
   const frameRef = useRef<number | null>(null);
   const [isBuffering, setIsBuffering] = useState(false);
   const clockRef = useRef({ timelineTime: 0, lastTimestamp: 0, lastUiUpdate: 0 });
@@ -106,21 +103,11 @@ export const VideoPlayer: React.FC = () => {
   const registerVideo = useCallback((id: string, element: HTMLVideoElement | null) => {
     if (element) {
       videoRefs.current.set(id, element);
+      rendererRef.current?.registerVideo(id, element);
       return;
     }
     videoRefs.current.delete(id);
-    const sprite = spriteRefs.current.get(id);
-    if (sprite) {
-      sprite.parent?.removeChild(sprite);
-      sprite.filters = null;
-      sprite.destroy();
-    }
-    spriteRefs.current.delete(id);
-    const texture = textureRefs.current.get(id);
-    if (texture) texture.destroy(true);
-    textureRefs.current.delete(id);
-    effectSignatureRefs.current.delete(id);
-    if (visibleClipIdRef.current === id) visibleClipIdRef.current = null;
+    rendererRef.current?.unregisterVideo(id);
   }, []);
 
   const registerAudio = useCallback((id: string, element: HTMLAudioElement | null) => {
@@ -128,54 +115,11 @@ export const VideoPlayer: React.FC = () => {
     else audioRefs.current.delete(id);
   }, []);
 
-  const renderVideo = useCallback((clip: Clip | null) => {
-    const app = appRef.current;
-    if (!app) return;
-    if (!clip) {
-      visibleClipIdRef.current = null;
-      app.stage.removeChildren();
-      app.renderer.render(app.stage);
-      return;
-    }
-
-    const video = videoRefs.current.get(clip.id);
-    if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-      return; // Keep the previous rendered frame visible while the next clip buffers.
-    }
-    let texture = textureRefs.current.get(clip.id);
-    let sprite = spriteRefs.current.get(clip.id);
-    if (!texture || !sprite) {
-      texture = Texture.from(video);
-      sprite = new Sprite(texture);
-      textureRefs.current.set(clip.id, texture);
-      spriteRefs.current.set(clip.id, sprite);
-    }
-    texture.baseTexture.update();
-    const scaleMethod = clip.transform.fit === "cover" ? Math.max : Math.min;
-    const scale = scaleMethod(
-      app.screen.width / Math.max(1, video.videoWidth),
-      app.screen.height / Math.max(1, video.videoHeight),
-    ) * clip.transform.scale;
-    sprite.anchor.set(0.5);
-    sprite.width = video.videoWidth * scale;
-    sprite.height = video.videoHeight * scale;
-    sprite.x = app.screen.width / 2 + clip.transform.x;
-    sprite.y = app.screen.height / 2 + clip.transform.y;
-    sprite.rotation = clip.transform.rotation * Math.PI / 180;
-    const effectNames = snapshotRef.current.effects
-      .filter((effect) => effect.clipId === clip.id)
-      .map((effect) => effect.name);
-    const effectSignature = effectNames.join(",");
-    if (effectSignatureRefs.current.get(clip.id) !== effectSignature) {
-      sprite.filters = effectNames.map(createFilter);
-      effectSignatureRefs.current.set(clip.id, effectSignature);
-    }
-    if (visibleClipIdRef.current !== clip.id) {
-      app.stage.removeChildren();
-      app.stage.addChild(sprite);
-      visibleClipIdRef.current = clip.id;
-    }
-    app.renderer.render(app.stage);
+  const renderTimeline = useCallback((timelineTime: number) => {
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    const snapshot = snapshotRef.current;
+    renderer.renderTimelineFrame(timelineTime, snapshot.clips, snapshot.effects);
   }, []);
 
   const handleVideoReady = useCallback((id: string) => {
@@ -188,41 +132,28 @@ export const VideoPlayer: React.FC = () => {
     if (Math.abs(video.currentTime - desiredSeconds) > 0.05) {
       video.currentTime = Math.max(0, desiredSeconds);
     }
-    renderVideo(active);
+    renderTimeline(snapshot.currentTime);
     if (snapshot.isPlaying && video.paused) void video.play().catch(() => undefined);
-  }, [renderVideo]);
+  }, [renderTimeline]);
 
   useEffect(() => {
     const host = pixiHostRef.current;
     if (!host) return;
-    const textures = textureRefs.current;
-    const sprites = spriteRefs.current;
-    const effectSignatures = effectSignatureRefs.current;
-    const app = new Application({
-      width: 1280,
-      height: 720,
-      backgroundColor: 0x000000,
-      antialias: true,
-      autoStart: false,
-      preserveDrawingBuffer: true,
+    const renderer = new PixiTimelineRenderer({
+      width: PREVIEW_WIDTH,
+      height: PREVIEW_HEIGHT,
     });
-    const canvas = app.view;
-    if (!(canvas instanceof HTMLCanvasElement)) {
-      app.destroy(true, { children: true });
-      return;
-    }
+    const { canvas } = renderer;
     canvas.className = styles.canvas;
     host.appendChild(canvas);
-    appRef.current = app;
+    rendererRef.current = renderer;
+    videoRefs.current.forEach((video, id) => renderer.registerVideo(id, video));
+    renderTimeline(snapshotRef.current.currentTime);
     return () => {
-      textures.forEach((texture) => texture.destroy(true));
-      textures.clear();
-      sprites.clear();
-      effectSignatures.clear();
-      app.destroy(true, { children: true });
-      appRef.current = null;
+      rendererRef.current = null;
+      renderer.destroy();
     };
-  }, []);
+  }, [renderTimeline]);
 
   const syncMedia = useCallback((timelineTime: number, shouldPlay: boolean) => {
     const snapshot = snapshotRef.current;
@@ -248,8 +179,7 @@ export const VideoPlayer: React.FC = () => {
       if (!shouldPlay && !video.paused) video.pause();
     });
     setIsBuffering(Boolean(activeVideo) && !videoReady);
-    if (activeVideo) renderVideo(activeVideo);
-    else renderVideo(null);
+    renderTimeline(timelineTime);
 
     snapshot.audioClips.forEach((clip) => {
       const audio = audioRefs.current.get(clip.id);
@@ -275,7 +205,7 @@ export const VideoPlayer: React.FC = () => {
       if (!shouldPlay && !audio.paused) audio.pause();
     });
     return videoReady;
-  }, [renderVideo]);
+  }, [renderTimeline]);
 
   const playbackFrame = useCallback((timestamp: number) => {
     const snapshot = snapshotRef.current;
@@ -330,6 +260,10 @@ export const VideoPlayer: React.FC = () => {
       isSeeking: false,
     });
   }, [currentTime, isPlaying, isSeeking, syncMedia, totalDuration, updatePlayback]);
+
+  useEffect(() => {
+    if (!isPlaying && !isSeeking) syncMedia(currentTime, false);
+  }, [audioClips, clips, currentTime, effects, isPlaying, isSeeking, syncMedia]);
 
   const beginPlayback = useCallback(async () => {
     const media = [...videoRefs.current.values(), ...audioRefs.current.values()];

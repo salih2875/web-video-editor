@@ -96,7 +96,7 @@ const createFallbackPeaks = (peakCount: number) =>
     0.2 + Math.abs(Math.sin(index * 0.41)) * 0.35,
   );
 
-export const createAudioPeaks = async (file: File, peakCount = 180): Promise<number[]> => {
+const decodeAudioPeaks = async (file: File, peakCount: number): Promise<number[]> => {
   let audioContext: AudioContext | null = null;
   try {
     audioContext = new AudioContext();
@@ -114,9 +114,21 @@ export const createAudioPeaks = async (file: File, peakCount = 180): Promise<num
     });
     const maxPeak = Math.max(...peaks, 0.01);
     return peaks.map((peak) => peak / maxPeak);
-  } catch {
-    return createFallbackPeaks(peakCount);
   } finally {
     await audioContext?.close().catch(() => undefined);
   }
 };
+
+export const createAudioPeaksIfPresent = async (
+  file: File,
+  peakCount = 180,
+): Promise<number[] | null> => {
+  try {
+    return await decodeAudioPeaks(file, peakCount);
+  } catch {
+    return null;
+  }
+};
+
+export const createAudioPeaks = async (file: File, peakCount = 180): Promise<number[]> =>
+  (await createAudioPeaksIfPresent(file, peakCount)) ?? createFallbackPeaks(peakCount);

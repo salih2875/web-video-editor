@@ -13,6 +13,8 @@ const importTypescriptModule = async (path) => {
 
 const math = await importTypescriptModule("./src/utils/timelineMath.ts");
 const time = await importTypescriptModule("./src/utils/formatTime.ts");
+const frameTiming = await importTypescriptModule("./src/rendering/frameTiming.ts");
+const audioFilterGraph = await importTypescriptModule("./src/utils/audioFilterGraph.ts");
 
 test("highest z-index item wins an overlap, with later item winning ties", () => {
   const items = [
@@ -90,4 +92,36 @@ test("time formatting handles invalid values and minute boundaries", () => {
   assert.equal(time.formatTime(-1), "00:00.0");
   assert.equal(time.formatTime(1.2), "00:01.2");
   assert.equal(time.formatTime(61.99), "01:01.9");
+});
+
+test("export frame timestamps are index-derived without cumulative drift", () => {
+  assert.equal(frameTiming.getExportFrameCount(1001, 30), 31);
+  assert.equal(frameTiming.getFrameTimestampUs(0, 30), 0);
+  assert.equal(frameTiming.getFrameTimestampUs(30, 30), 1_000_000);
+  assert.equal(
+    Array.from({ length: 30 }, (_, index) => frameTiming.getFrameDurationUs(index, 30))
+      .reduce((total, duration) => total + duration, 0),
+    1_000_000,
+  );
+});
+
+test("clip source timestamps include trims and timeline offsets", () => {
+  const clip = { clipStart: 2_500, timelineStart: 4_000 };
+  assert.equal(frameTiming.getClipSourceTimeSeconds(clip, 5_250), 3.75);
+});
+
+test("audio export filters terminate padding at the timeline duration", () => {
+  const mixed = audioFilterGraph.createFinalAudioFilter(["[a0]", "[a1]"], 2);
+  assert.equal((mixed.match(/apad=whole_dur=2\.000000/g) ?? []).length, 2);
+  assert.match(mixed, /amix=inputs=2:duration=longest:dropout_transition=0/);
+  assert.match(mixed, /volume=2/);
+  assert.match(mixed, /atrim=start=0:end=2\.000000/);
+  assert.doesNotMatch(mixed, /normalize=/);
+  assert.doesNotMatch(mixed, /apad,atrim=duration/);
+
+  assert.equal(
+    audioFilterGraph.createFinalAudioFilter([], 2),
+    "anullsrc=r=48000:cl=stereo,atrim=start=0:end=2.000000,asetpts=N/SR/TB[afinal]",
+  );
+  assert.doesNotMatch(audioFilterGraph.createFinalAudioFilter([], 2), /anullsrc=.*:d=/);
 });
