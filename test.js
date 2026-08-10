@@ -15,6 +15,10 @@ const math = await importTypescriptModule("./src/utils/timelineMath.ts");
 const time = await importTypescriptModule("./src/utils/formatTime.ts");
 const frameTiming = await importTypescriptModule("./src/rendering/frameTiming.ts");
 const audioFilterGraph = await importTypescriptModule("./src/utils/audioFilterGraph.ts");
+const effectCatalog = await importTypescriptModule("./src/effects/effectCatalog.ts");
+const colorMatrixEffects = await importTypescriptModule(
+  "./src/effects/applyColorMatrixEffect.ts",
+);
 
 test("highest z-index item wins an overlap, with later item winning ties", () => {
   const items = [
@@ -124,4 +128,54 @@ test("audio export filters terminate padding at the timeline duration", () => {
     "anullsrc=r=48000:cl=stereo,atrim=start=0:end=2.000000,asetpts=N/SR/TB[afinal]",
   );
   assert.doesNotMatch(audioFilterGraph.createFinalAudioFilter([], 2), /anullsrc=.*:d=/);
+});
+
+test("effect catalog exposes every PIXI option once in display order", () => {
+  assert.deepEqual(
+    effectCatalog.EFFECT_DEFINITIONS.map(({ name }) => name),
+    [
+      "Blur",
+      "Noise",
+      "Grayscale",
+      "Sepia",
+      "Vintage",
+      "Technicolor",
+      "Polaroid",
+      "Night",
+      "Kodachrome",
+    ],
+  );
+  assert.equal(
+    new Set(effectCatalog.EFFECT_DEFINITIONS.map(({ name }) => name)).size,
+    effectCatalog.EFFECT_DEFINITIONS.length,
+  );
+  assert.deepEqual(effectCatalog.EFFECT_CATEGORIES, ["Essentials", "Color", "Film looks"]);
+  assert.ok(effectCatalog.EFFECT_DEFINITIONS.every(({ category }) =>
+    effectCatalog.EFFECT_CATEGORIES.includes(category)));
+  assert.equal(effectCatalog.isEffectName("Polaroid"), true);
+  assert.equal(effectCatalog.isEffectName("Unknown legacy effect"), false);
+  assert.equal(effectCatalog.isEffectName(null), false);
+});
+
+test("offset-based PIXI presets use the matrix-normalizing path", () => {
+  const calls = [];
+  const target = {
+    greyscale: (...args) => calls.push(["greyscale", ...args]),
+    sepia: (...args) => calls.push(["sepia", ...args]),
+    vintage: (...args) => calls.push(["vintage", ...args]),
+    technicolor: (...args) => calls.push(["technicolor", ...args]),
+    polaroid: (...args) => calls.push(["polaroid", ...args]),
+    night: (...args) => calls.push(["night", ...args]),
+    kodachrome: (...args) => calls.push(["kodachrome", ...args]),
+  };
+
+  colorMatrixEffects.applyColorMatrixEffect(target, "Vintage");
+  colorMatrixEffects.applyColorMatrixEffect(target, "Technicolor");
+  colorMatrixEffects.applyColorMatrixEffect(target, "Kodachrome");
+
+  assert.deepEqual(calls, [
+    ["vintage", true],
+    ["technicolor", true],
+    ["kodachrome", true],
+  ]);
 });

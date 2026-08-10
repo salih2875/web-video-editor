@@ -1,9 +1,8 @@
+import { createFFmpeg, fetchFile } from "@ffmpeg/ffmpeg";
 import type { AudioClip } from "../types/editor";
 import { createFinalAudioFilter } from "./audioFilterGraph";
 import { getAudibleSegments } from "./timelineMath";
 
-const ffmpegModule = await import("@ffmpeg/ffmpeg");
-const { createFFmpeg, fetchFile } = ffmpegModule;
 type FFmpeg = ReturnType<typeof createFFmpeg>;
 
 const ffmpegRef: { current: FFmpeg | null } = { current: null };

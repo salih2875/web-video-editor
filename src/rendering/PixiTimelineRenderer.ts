@@ -1,4 +1,5 @@
 import { Application, Sprite, Texture, filters, type Filter } from "pixi.js";
+import { applyColorMatrixEffect } from "../effects/applyColorMatrixEffect";
 import type { Clip, Effect, EffectName } from "../types/editor";
 import { getTopTimelineItem } from "../utils/timelineMath";
 
@@ -31,10 +32,16 @@ const getStableNoiseSeed = (clipId: string) => {
   return (hash >>> 0) / 0xffffffff;
 };
 
-const createFilter = (effectName: EffectName, clipId: string): Filter =>
-  effectName === "Blur"
-    ? new filters.BlurFilter()
-    : new filters.NoiseFilter(0.5, getStableNoiseSeed(clipId));
+const createFilter = (effectName: EffectName, clipId: string): Filter => {
+  if (effectName === "Blur") return new filters.BlurFilter();
+  if (effectName === "Noise") {
+    return new filters.NoiseFilter(0.5, getStableNoiseSeed(clipId));
+  }
+
+  const colorMatrix = new filters.ColorMatrixFilter();
+  applyColorMatrixEffect(colorMatrix, effectName);
+  return colorMatrix;
+};
 
 const destroyFilters = (sprite: Sprite) => {
   sprite.filters?.forEach((filter) => filter.destroy());

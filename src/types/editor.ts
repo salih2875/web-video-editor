@@ -1,3 +1,7 @@
+import type { EffectName } from "../effects/effectCatalog";
+
+export type { EffectName } from "../effects/effectCatalog";
+
 export interface Clip {
   id: string;
   name: string;
@@ -43,8 +47,6 @@ export interface AudioClip {
 export type MediaSelection =
   | { type: "video"; id: string }
   | { type: "audio"; id: string };
-
-export type EffectName = "Blur" | "Noise";
 
 export interface Effect {
   clipId: string;

@@ -1,3 +1,4 @@
+import { isEffectName } from "../effects/effectCatalog";
 import type { AudioClip, Clip, EditorState, Effect } from "../types/editor";
 
 const DATABASE_NAME = "pixi-video-editor";
@@ -10,11 +11,18 @@ interface StoredProject {
   savedAt: number;
   clips: Clip[];
   audioClips: AudioClip[];
-  effects?: Effect[];
+  effects?: Array<{ clipId?: unknown; name?: unknown }>;
   assets: Array<{ url: string; blob: Blob }>;
 }
 
 const assetBlobCache = new Map<string, Promise<Blob>>();
+
+export const normalizeStoredEffects = (
+  effects: StoredProject["effects"],
+): Effect[] => (effects ?? []).flatMap((effect) =>
+  typeof effect?.clipId === "string" && isEffectName(effect.name)
+    ? [{ clipId: effect.clipId, name: effect.name }]
+    : []);
 
 const openDatabase = () => new Promise<IDBDatabase>((resolve, reject) => {
   const request = indexedDB.open(DATABASE_NAME, 1);
@@ -92,7 +100,7 @@ export const loadProjectSnapshot = async (): Promise<{
   const urlMap = new Map(project.assets.map((asset) => [asset.url, URL.createObjectURL(asset.blob)]));
   return {
     name: project.name,
-    effects: project.effects ?? [],
+    effects: normalizeStoredEffects(project.effects),
     clips: project.clips.map((clip, index) => ({
       ...clip,
       name: clip.name || `Video ${index + 1}`,
