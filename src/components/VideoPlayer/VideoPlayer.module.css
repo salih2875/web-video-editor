@@ -46,6 +46,19 @@
   font-size: 12px;
 }
 
+.playbackError {
+  position: absolute;
+  z-index: 12;
+  top: 14px;
+  right: 14px;
+  max-width: calc(100% - 28px);
+  padding: 6px 9px;
+  border-radius: 4px;
+  background: rgba(94, 24, 24, .9);
+  color: #fff;
+  font-size: 12px;
+}
+
 .controls {
   position: absolute;
   bottom: 20px;

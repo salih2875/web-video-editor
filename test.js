@@ -14,6 +14,7 @@ const importTypescriptModule = async (path) => {
 const math = await importTypescriptModule("./src/utils/timelineMath.ts");
 const time = await importTypescriptModule("./src/utils/formatTime.ts");
 const frameTiming = await importTypescriptModule("./src/rendering/frameTiming.ts");
+const playbackClock = await importTypescriptModule("./src/utils/playbackClock.ts");
 const audioFilterGraph = await importTypescriptModule("./src/utils/audioFilterGraph.ts");
 const effectCatalog = await importTypescriptModule("./src/effects/effectCatalog.ts");
 const colorMatrixEffects = await importTypescriptModule(
@@ -112,6 +113,12 @@ test("export frame timestamps are index-derived without cumulative drift", () =>
 test("clip source timestamps include trims and timeline offsets", () => {
   const clip = { clipStart: 2_500, timelineStart: 4_000 };
   assert.equal(frameTiming.getClipSourceTimeSeconds(clip, 5_250), 3.75);
+});
+
+test("preview clock preserves long frames instead of rewinding playing media", () => {
+  assert.equal(playbackClock.advancePlaybackTime(2_000, 10_000, 10_750, false), 2_750);
+  assert.equal(playbackClock.advancePlaybackTime(2_000, 10_000, 10_750, true), 2_000);
+  assert.equal(playbackClock.advancePlaybackTime(2_000, 10_750, 10_700, false), 2_000);
 });
 
 test("audio export filters terminate padding at the timeline duration", () => {

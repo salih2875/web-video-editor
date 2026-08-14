@@ -11,6 +11,7 @@ import {
   getTopAudibleTimelineItem,
   getTopTimelineItem,
 } from "../../utils/timelineMath";
+import { advancePlaybackTime } from "../../utils/playbackClock";
 
 interface PlaybackSnapshot {
   clips: Clip[];
@@ -21,6 +22,8 @@ interface PlaybackSnapshot {
   isPlaying: boolean;
   loopPlayback: boolean;
 }
+
+const PLAYBACK_DRIFT_TOLERANCE_SECONDS = 0.25;
 
 const HiddenVideo = memo(({
   clip,
@@ -80,7 +83,14 @@ export const VideoPlayer: React.FC = () => {
   const rendererRef = useRef<PixiTimelineRenderer | null>(null);
   const frameRef = useRef<number | null>(null);
   const [isBuffering, setIsBuffering] = useState(false);
-  const clockRef = useRef({ timelineTime: 0, lastTimestamp: 0, lastUiUpdate: 0 });
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const pendingPlayRef = useRef(new WeakSet<HTMLMediaElement>());
+  const clockRef = useRef({
+    timelineTime: 0,
+    lastTimestamp: 0,
+    lastUiUpdate: 0,
+    waitingForMedia: false,
+  });
   const snapshotRef = useRef<PlaybackSnapshot>({
     clips,
     audioClips,
@@ -124,16 +134,18 @@ export const VideoPlayer: React.FC = () => {
 
   const handleVideoReady = useCallback((id: string) => {
     const snapshot = snapshotRef.current;
-    const active = getTopTimelineItem(snapshot.currentTime, snapshot.clips);
+    const timelineTime = snapshot.isPlaying
+      ? clockRef.current.timelineTime
+      : snapshot.currentTime;
+    const active = getTopTimelineItem(timelineTime, snapshot.clips);
     if (!active || active.id !== id) return;
     const video = videoRefs.current.get(id);
     if (!video) return;
-    const desiredSeconds = (active.clipStart + snapshot.currentTime - active.timelineStart) / 1000;
+    const desiredSeconds = (active.clipStart + timelineTime - active.timelineStart) / 1000;
     if (Math.abs(video.currentTime - desiredSeconds) > 0.05) {
       video.currentTime = Math.max(0, desiredSeconds);
     }
-    renderTimeline(snapshot.currentTime);
-    if (snapshot.isPlaying && video.paused) void video.play().catch(() => undefined);
+    renderTimeline(timelineTime);
   }, [renderTimeline]);
 
   useEffect(() => {
@@ -155,11 +167,36 @@ export const VideoPlayer: React.FC = () => {
     };
   }, [renderTimeline]);
 
-  const syncMedia = useCallback((timelineTime: number, shouldPlay: boolean) => {
+  const requestMediaPlay = useCallback((element: HTMLMediaElement) => {
+    if (!element.paused || pendingPlayRef.current.has(element)) return;
+    pendingPlayRef.current.add(element);
+    void element.play().catch((error: unknown) => {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      const reason = error instanceof Error ? error.message : String(error);
+      setPlaybackError(`Playback could not start: ${reason}`);
+      updatePlayback({ isPlaying: false });
+    }).finally(() => {
+      pendingPlayRef.current.delete(element);
+    });
+  }, [updatePlayback]);
+
+  const syncMedia = useCallback((
+    timelineTime: number,
+    shouldPlay: boolean,
+    forceSeek = false,
+    userInitiated = false,
+  ) => {
     const snapshot = snapshotRef.current;
     const activeVideo = getTopTimelineItem(timelineTime, snapshot.clips);
     const activeAudio = getTopAudibleTimelineItem(timelineTime, snapshot.audioClips);
     let videoReady = !activeVideo;
+    let audioReady = !activeAudio;
+    const activeVideoElement = activeVideo
+      ? videoRefs.current.get(activeVideo.id) ?? null
+      : null;
+    const activeAudioElement = activeAudio
+      ? audioRefs.current.get(activeAudio.id) ?? null
+      : null;
 
     snapshot.clips.forEach((clip) => {
       const video = videoRefs.current.get(clip.id);
@@ -170,15 +207,14 @@ export const VideoPlayer: React.FC = () => {
         return;
       }
       const desiredSeconds = (clip.clipStart + timelineTime - clip.timelineStart) / 1000;
-      videoReady = video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+      const drift = Math.abs(video.currentTime - desiredSeconds);
       if (video.readyState >= HTMLMediaElement.HAVE_METADATA
-        && Math.abs(video.currentTime - desiredSeconds) > 0.1) {
+        && drift > (forceSeek ? 0.01 : PLAYBACK_DRIFT_TOLERANCE_SECONDS)) {
         video.currentTime = Math.max(0, desiredSeconds);
       }
-      if (shouldPlay && video.paused && videoReady) void video.play().catch(() => undefined);
-      if (!shouldPlay && !video.paused) video.pause();
+      videoReady = !video.seeking
+        && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
     });
-    setIsBuffering(Boolean(activeVideo) && !videoReady);
     renderTimeline(timelineTime);
 
     snapshot.audioClips.forEach((clip) => {
@@ -197,29 +233,71 @@ export const VideoPlayer: React.FC = () => {
       const fadeOutGain = clip.fadeOut > 0 ? Math.min(1, remaining / clip.fadeOut) : 1;
       audio.volume = Math.max(0, Math.min(1, clip.volume * fadeInGain * fadeOutGain));
       audio.muted = clip.muted;
+      const drift = Math.abs(audio.currentTime - desiredSeconds);
       if (audio.readyState >= HTMLMediaElement.HAVE_METADATA
-        && Math.abs(audio.currentTime - desiredSeconds) > 0.1) {
+        && drift > (forceSeek ? 0.01 : PLAYBACK_DRIFT_TOLERANCE_SECONDS)) {
         audio.currentTime = Math.max(0, desiredSeconds);
       }
-      if (shouldPlay && audio.paused) void audio.play().catch(() => undefined);
-      if (!shouldPlay && !audio.paused) audio.pause();
+      audioReady = !audio.seeking
+        && audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
     });
-    return videoReady;
-  }, [renderTimeline]);
+
+    const mediaReady = videoReady && audioReady;
+    setIsBuffering(Boolean(activeVideo || activeAudio) && !mediaReady);
+
+    if (!shouldPlay) {
+      if (activeVideoElement && !activeVideoElement.paused) activeVideoElement.pause();
+      if (activeAudioElement && !activeAudioElement.paused) activeAudioElement.pause();
+      return mediaReady;
+    }
+
+    // Even if one side still needs to buffer, make both play requests during
+    // the originating click so stricter browsers authorize audible playback.
+    if (userInitiated) {
+      if (activeVideoElement) requestMediaPlay(activeVideoElement);
+      if (activeAudioElement) requestMediaPlay(activeAudioElement);
+    }
+
+    if (mediaReady) {
+      if (activeVideoElement) requestMediaPlay(activeVideoElement);
+      if (activeAudioElement) requestMediaPlay(activeAudioElement);
+    } else {
+      // Buffer an unready element, but pause its ready counterpart so the
+      // soundtrack cannot run ahead while either side is stalled.
+      if (activeVideoElement) {
+        if (videoReady) activeVideoElement.pause();
+        else requestMediaPlay(activeVideoElement);
+      }
+      if (activeAudioElement) {
+        if (audioReady) activeAudioElement.pause();
+        else requestMediaPlay(activeAudioElement);
+      }
+    }
+    return mediaReady;
+  }, [renderTimeline, requestMediaPlay]);
 
   const playbackFrame = useCallback((timestamp: number) => {
     const snapshot = snapshotRef.current;
     if (!snapshot.isPlaying || snapshot.totalDuration <= 0) return;
     if (!clockRef.current.lastTimestamp) clockRef.current.lastTimestamp = timestamp;
-    const elapsed = Math.min(100, timestamp - clockRef.current.lastTimestamp);
+    clockRef.current.timelineTime = advancePlaybackTime(
+      clockRef.current.timelineTime,
+      clockRef.current.lastTimestamp,
+      timestamp,
+      clockRef.current.waitingForMedia,
+    );
     clockRef.current.lastTimestamp = timestamp;
 
+    // Media and performance.now() both continue across a slow frame. Keeping
+    // the full elapsed time prevents the next sync from seeking media backward.
+    // Once an actual media stall is detected, hold this clock until it is ready.
     const ready = syncMedia(clockRef.current.timelineTime, true);
-    if (ready) clockRef.current.timelineTime += elapsed;
+    clockRef.current.waitingForMedia = !ready;
     if (clockRef.current.timelineTime >= snapshot.totalDuration) {
       clockRef.current.timelineTime = 0;
       clockRef.current.lastTimestamp = timestamp;
-      syncMedia(0, snapshot.loopPlayback);
+      clockRef.current.waitingForMedia = false;
+      syncMedia(0, snapshot.loopPlayback, true);
       updatePlayback({
         currentTime: 0,
         isSeeking: false,
@@ -243,6 +321,7 @@ export const VideoPlayer: React.FC = () => {
     clockRef.current.timelineTime = timelineTime;
     clockRef.current.lastTimestamp = 0;
     clockRef.current.lastUiUpdate = 0;
+    clockRef.current.waitingForMedia = false;
     if (isPlaying) frameRef.current = requestAnimationFrame(playbackFrame);
     else syncMedia(timelineTime, false);
     return () => {
@@ -255,7 +334,9 @@ export const VideoPlayer: React.FC = () => {
     if (!isSeeking) return;
     const seekTime = totalDuration > 0 ? Math.min(currentTime, totalDuration) : 0;
     clockRef.current.timelineTime = seekTime;
-    syncMedia(seekTime, isPlaying);
+    clockRef.current.lastTimestamp = 0;
+    clockRef.current.waitingForMedia = false;
+    syncMedia(seekTime, isPlaying, true);
     updatePlayback({
       isSeeking: false,
     });
@@ -265,21 +346,21 @@ export const VideoPlayer: React.FC = () => {
     if (!isPlaying && !isSeeking) syncMedia(currentTime, false);
   }, [audioClips, clips, currentTime, effects, isPlaying, isSeeking, syncMedia]);
 
-  const beginPlayback = useCallback(async () => {
-    const media = [...videoRefs.current.values(), ...audioRefs.current.values()];
-    await Promise.allSettled(media.map(async (element) => {
-      if (!element.paused) return;
-      const muted = element.muted;
-      element.muted = true;
-      try {
-        await element.play();
-        element.pause();
-      } finally {
-        element.muted = muted;
-      }
-    }));
+  const beginPlayback = useCallback(() => {
+    const startTime = currentTime >= totalDuration && totalDuration > 0 ? 0 : currentTime;
+    setPlaybackError(null);
+    clockRef.current.timelineTime = startTime;
+    clockRef.current.lastTimestamp = 0;
+    clockRef.current.lastUiUpdate = 0;
+    clockRef.current.waitingForMedia = false;
+
+    // Start the audible element synchronously inside the click handler. Waiting
+    // for a muted warm-up loses the browser's user-activation permission and can
+    // make audio-only projects fail silently.
+    syncMedia(startTime, true, true, true);
+    if (startTime !== currentTime) seek(startTime);
     play();
-  }, [play]);
+  }, [currentTime, play, seek, syncMedia, totalDuration]);
 
   const hasMedia = clips.length > 0 || audioClips.length > 0;
   return (
@@ -296,10 +377,11 @@ export const VideoPlayer: React.FC = () => {
           {audioClips.length ? "Audio-only project" : "Add video or audio to begin"}
         </div>
       )}
-      {isBuffering && <div className={styles.buffering}>Buffering next clip…</div>}
+      {isBuffering && <div className={styles.buffering}>Buffering media…</div>}
+      {playbackError && <div className={styles.playbackError}>{playbackError}</div>}
       {hasMedia && (
         <div className={styles.controls}>
-          <button onClick={isPlaying ? pause : () => void beginPlayback()}>{isPlaying ? "Pause" : "Play"}</button>
+          <button onClick={isPlaying ? pause : beginPlayback}>{isPlaying ? "Pause" : "Play"}</button>
           <button onClick={() => seek(0)}>Reset</button>
           <span>{(currentTime / 1000).toFixed(1)} / {(totalDuration / 1000).toFixed(1)}s</span>
         </div>
