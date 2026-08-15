@@ -145,14 +145,12 @@ export const muxTimeline = async ({
   signal.throwIfAborted();
   const jobId = `export_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const videoInput = `${jobId}_pixi.h264`;
-  const audioOutput = `${jobId}_audio.m4a`;
   const output = `${jobId}.mp4`;
   const audibleSegments = getAudibleSegments(audioClips);
   const audioUrls = [...new Set(audibleSegments.map((segment) => segment.item.clipURL))];
   const assetNames = new Map<string, string>();
-  const filesToDelete = [videoInput, audioOutput, output];
+  const filesToDelete = [videoInput, output];
   const seconds = duration / 1000;
-  let progressStep: "audio" | "mux" = "audio";
   let commandLogs: string[] = [];
   const stopOnAbort = () => {
     instance.exit();
@@ -162,8 +160,7 @@ export const muxTimeline = async ({
   };
   const progressHandler = ({ ratio }: { ratio: number }) => {
     if (!Number.isFinite(ratio)) return;
-    const normalized = Math.max(0, Math.min(1, ratio));
-    onProgress?.(progressStep === "audio" ? normalized * 0.8 : 0.8 + normalized * 0.2);
+    onProgress?.(Math.max(0, Math.min(1, ratio)));
   };
   const logHandler = ({ type, message }: { type: string; message: string }) => {
     console.log("[ffmpeg]", message);
@@ -189,23 +186,6 @@ export const muxTimeline = async ({
       throw failure;
     }
   };
-  const hasAudioStream = async (input: string, probeOutput: string) => {
-    commandLogs = [];
-    await instance.run(
-      "-i", input,
-      "-map", "0:a:0",
-      "-frames:a", "1",
-      "-c:a", "pcm_s16le",
-      probeOutput,
-    );
-    signal.throwIfAborted();
-    try {
-      return instance.FS("readFile", probeOutput).byteLength > 44;
-    } catch {
-      return false;
-    }
-  };
-
   try {
     signal.addEventListener("abort", stopOnAbort, { once: true });
     if (signal.aborted) stopOnAbort();
@@ -224,75 +204,36 @@ export const muxTimeline = async ({
     instance.setProgress(progressHandler);
     instance.setLogger(logHandler);
 
-    const availableAudioUrls: string[] = [];
-    for (const [index, url] of audioUrls.entries()) {
-      const name = assetNames.get(url);
-      if (!name) throw new Error("An audio export asset was not loaded.");
-      const probeOutput = `${jobId}_probe_${index}.wav`;
-      filesToDelete.push(probeOutput);
-      if (await hasAudioStream(name, probeOutput)) availableAudioUrls.push(url);
-      try {
-        instance.FS("unlink", probeOutput);
-      } catch {
-        // A source without audio does not create a probe file.
-      }
-    }
-
-    const availableAudioUrlSet = new Set(availableAudioUrls);
-    const unavailableStandaloneClip = audibleSegments.find(
-      ({ item }) => !availableAudioUrlSet.has(item.clipURL) && !item.sourceVideoClipId,
-    );
-    if (unavailableStandaloneClip) {
-      throw new Error(
-        `The audio track “${unavailableStandaloneClip.item.name}” has no FFmpeg-compatible audio stream.`,
-      );
-    }
-
-    const exportableSegments = audibleSegments.filter(
-      ({ item }) => availableAudioUrlSet.has(item.clipURL),
-    );
     const audioArgs: string[] = [];
     const inputIndexByUrl = new Map<string, number>();
-    availableAudioUrls.forEach((url, index) => {
+    audioUrls.forEach((url, index) => {
       const name = assetNames.get(url);
       if (!name) throw new Error("An audio export asset was not loaded.");
-      inputIndexByUrl.set(url, index);
+      // Input zero is the already encoded PIXI video stream.
+      inputIndexByUrl.set(url, index + 1);
       audioArgs.push("-i", name);
     });
-    const filters = createAudioFilters(exportableSegments, seconds, inputIndexByUrl);
+    const filters = createAudioFilters(audibleSegments, seconds, inputIndexByUrl);
 
     onPhase?.("mixing-audio");
-    await runCommand(
-      [
-        ...audioArgs,
-        "-filter_complex", filters.join(";"),
-        "-map", "[afinal]",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-t", seconds.toFixed(6),
-        audioOutput,
-      ],
-      audioOutput,
-      "FFmpeg could not render timeline audio.",
-    );
-
-    progressStep = "mux";
-    onPhase?.("muxing");
     const data = await runCommand(
       [
         "-fflags", "+genpts",
         "-r", String(framerate),
         "-f", "h264",
         "-i", videoInput,
-        "-i", audioOutput,
+        ...audioArgs,
+        "-filter_complex", filters.join(";"),
         "-map", "0:v:0",
-        "-map", "1:a:0",
-        "-c", "copy",
+        "-map", "[afinal]",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", "192k",
         "-t", seconds.toFixed(6),
         output,
       ],
       output,
-      "FFmpeg could not mux the export.",
+      "FFmpeg could not render timeline audio and mux the export.",
     );
     onPhase?.("finalizing");
     return URL.createObjectURL(new Blob([data], { type: "video/mp4" }));
