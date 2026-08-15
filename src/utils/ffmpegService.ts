@@ -4,6 +4,7 @@ import { createFinalAudioFilter } from "./audioFilterGraph";
 import { getAudibleSegments } from "./timelineMath";
 
 type FFmpeg = ReturnType<typeof createFFmpeg>;
+const MAX_CONCURRENT_ASSET_LOADS = 2;
 
 const ffmpegRef: { current: FFmpeg | null } = { current: null };
 let isLoading = false;
@@ -62,6 +63,30 @@ const fetchAsset = async (url: string, signal: AbortSignal) => {
   const data = await fetchFile(url);
   signal.throwIfAborted();
   return data;
+};
+
+const loadAssetsIntoFFmpeg = async (
+  ffmpeg: FFmpeg,
+  urls: string[],
+  getName: (url: string, index: number) => string,
+  signal: AbortSignal,
+) => {
+  let nextIndex = 0;
+  const loadNext = async () => {
+    while (nextIndex < urls.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const data = await fetchAsset(urls[index], signal);
+      signal.throwIfAborted();
+      ffmpeg.FS("writeFile", getName(urls[index], index), data);
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(MAX_CONCURRENT_ASSET_LOADS, urls.length) },
+      loadNext,
+    ),
+  );
 };
 
 const createVolumeFilter = (
@@ -191,16 +216,12 @@ export const muxTimeline = async ({
     if (signal.aborted) stopOnAbort();
     onPhase?.("transferring");
     instance.FS("writeFile", videoInput, encodedVideo);
-    const assetResults = await Promise.allSettled(audioUrls.map(async (url, index) => {
+    await loadAssetsIntoFFmpeg(instance, audioUrls, (url, index) => {
       const name = `${jobId}_audio_${index}`;
       assetNames.set(url, name);
       filesToDelete.push(name);
-      instance.FS("writeFile", name, await fetchAsset(url, signal));
-    }));
-    const failedAsset = assetResults.find(
-      (result): result is PromiseRejectedResult => result.status === "rejected",
-    );
-    if (failedAsset) throw failedAsset.reason;
+      return name;
+    }, signal);
     instance.setProgress(progressHandler);
     instance.setLogger(logHandler);
 

@@ -15,6 +15,9 @@ interface VideoResource {
   texture: Texture;
   sprite: Sprite;
   effectSignature: string;
+  transform: Clip["transform"] | null;
+  videoWidth: number;
+  videoHeight: number;
 }
 
 export interface TimelineRenderResult {
@@ -53,6 +56,8 @@ export class PixiTimelineRenderer {
   readonly canvas: HTMLCanvasElement;
   private readonly videoByClipId = new Map<string, HTMLVideoElement>();
   private readonly resources = new Map<HTMLVideoElement, VideoResource>();
+  private effectsReference: Effect[] | null = null;
+  private readonly effectSignatureByClipId = new Map<string, string>();
   private visibleSprite: Sprite | null = null;
   private destroyed = false;
 
@@ -91,9 +96,12 @@ export class PixiTimelineRenderer {
     timelineTimeMs: number,
     clips: Clip[],
     effects: Effect[],
+    activeClipOverride?: Clip | null,
   ): TimelineRenderResult {
     this.assertAvailable();
-    const activeClip = getTopTimelineItem(timelineTimeMs, clips);
+    const activeClip = activeClipOverride === undefined
+      ? getTopTimelineItem(timelineTimeMs, clips)
+      : activeClipOverride;
     if (!activeClip) {
       this.clear();
       return { activeClip: null, rendered: true };
@@ -136,25 +144,30 @@ export class PixiTimelineRenderer {
     const { sprite, texture } = resource;
     texture.baseTexture.update();
 
-    const fitScale = clip.transform.fit === "cover" ? Math.max : Math.min;
-    const scale = fitScale(
-      this.app.screen.width / Math.max(1, video.videoWidth),
-      this.app.screen.height / Math.max(1, video.videoHeight),
-    ) * clip.transform.scale;
-    sprite.width = video.videoWidth * scale;
-    sprite.height = video.videoHeight * scale;
-    sprite.x = this.app.screen.width / 2
-      + clip.transform.x * this.app.screen.width / PREVIEW_WIDTH;
-    sprite.y = this.app.screen.height / 2
-      + clip.transform.y * this.app.screen.height / PREVIEW_HEIGHT;
-    sprite.rotation = clip.transform.rotation * Math.PI / 180;
+    if (resource.transform !== clip.transform
+      || resource.videoWidth !== video.videoWidth
+      || resource.videoHeight !== video.videoHeight) {
+      const fitScale = clip.transform.fit === "cover" ? Math.max : Math.min;
+      const scale = fitScale(
+        this.app.screen.width / Math.max(1, video.videoWidth),
+        this.app.screen.height / Math.max(1, video.videoHeight),
+      ) * clip.transform.scale;
+      sprite.width = video.videoWidth * scale;
+      sprite.height = video.videoHeight * scale;
+      sprite.x = this.app.screen.width / 2
+        + clip.transform.x * this.app.screen.width / PREVIEW_WIDTH;
+      sprite.y = this.app.screen.height / 2
+        + clip.transform.y * this.app.screen.height / PREVIEW_HEIGHT;
+      sprite.rotation = clip.transform.rotation * Math.PI / 180;
+      resource.transform = clip.transform;
+      resource.videoWidth = video.videoWidth;
+      resource.videoHeight = video.videoHeight;
+    }
 
-    const effectNames = effects
-      .filter((effect) => effect.clipId === clip.id)
-      .map((effect) => effect.name);
-    const effectSignature = `${clip.id}:${effectNames.join(",")}`;
+    const effectSignature = this.getEffectSignature(clip.id, effects);
     if (resource.effectSignature !== effectSignature) {
       destroyFilters(sprite);
+      const effectNames = effectSignature ? effectSignature.split(",") as EffectName[] : [];
       sprite.filters = effectNames.length
         ? effectNames.map((effectName) => createFilter(effectName, clip.id))
         : null;
@@ -176,13 +189,37 @@ export class PixiTimelineRenderer {
     const texture = Texture.from(video);
     const sprite = new Sprite(texture);
     sprite.anchor.set(0.5);
-    resource = { texture, sprite, effectSignature: "" };
+    resource = {
+      texture,
+      sprite,
+      effectSignature: "",
+      transform: null,
+      videoWidth: 0,
+      videoHeight: 0,
+    };
     this.resources.set(video, resource);
     return resource;
   }
 
+  private getEffectSignature(clipId: string, effects: Effect[]) {
+    if (this.effectsReference !== effects) {
+      this.effectsReference = effects;
+      this.effectSignatureByClipId.clear();
+      effects.forEach((effect) => {
+        const current = this.effectSignatureByClipId.get(effect.clipId);
+        this.effectSignatureByClipId.set(
+          effect.clipId,
+          current ? `${current},${effect.name}` : effect.name,
+        );
+      });
+    }
+    return this.effectSignatureByClipId.get(clipId) ?? "";
+  }
+
   private releaseVideoIfUnused(video: HTMLVideoElement) {
-    if ([...this.videoByClipId.values()].includes(video)) return;
+    for (const registeredVideo of this.videoByClipId.values()) {
+      if (registeredVideo === video) return;
+    }
     const resource = this.resources.get(video);
     if (!resource) return;
     if (this.visibleSprite === resource.sprite) {

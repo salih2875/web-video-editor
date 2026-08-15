@@ -63,6 +63,31 @@ const mergeChunks = (chunks: Uint8Array[], byteLength: number) => {
   return result;
 };
 
+const waitForEncoderCapacity = (
+  encoder: VideoEncoder,
+  signal: AbortSignal,
+) => {
+  if (encoder.encodeQueueSize < MAX_ENCODER_QUEUE_SIZE) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      encoder.removeEventListener("dequeue", handleDequeue);
+      signal.removeEventListener("abort", handleAbort);
+    };
+    const handleDequeue = () => {
+      if (encoder.encodeQueueSize >= MAX_ENCODER_QUEUE_SIZE) return;
+      cleanup();
+      resolve();
+    };
+    const handleAbort = () => {
+      cleanup();
+      reject(signal.reason ?? new DOMException("Export cancelled.", "AbortError"));
+    };
+    encoder.addEventListener("dequeue", handleDequeue);
+    signal.addEventListener("abort", handleAbort, { once: true });
+    handleDequeue();
+  });
+};
+
 const MUX_PHASE_PROGRESS: Record<MuxPhase, number> = {
   transferring: 0.86,
   "mixing-audio": 0.88,
@@ -145,6 +170,7 @@ const renderTimelineVideo = async ({
     await sources.prepare(clips, renderer, signal);
     const frameCount = getExportFrameCount(duration, framerate);
     const keyFrameInterval = Math.max(1, Math.round(framerate * 2));
+    let lastReportedPercent = -1;
 
     for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
       signal.throwIfAborted();
@@ -152,7 +178,7 @@ const renderTimelineVideo = async ({
       const activeClip = getTopTimelineItem(timelineTime, clips);
       if (activeClip) await sources.seekToTimelineFrame(activeClip, timelineTime, signal);
 
-      const result = renderer.renderTimelineFrame(timelineTime, clips, effects);
+      const result = renderer.renderTimelineFrame(timelineTime, clips, effects, activeClip);
       if (activeClip && (!result.rendered || result.activeClip?.id !== activeClip.id)) {
         throw new Error(`PIXI could not render a decoded frame for clip “${activeClip.name}”.`);
       }
@@ -167,8 +193,14 @@ const renderTimelineVideo = async ({
         frame.close();
       }
       if (encoderError) throw encoderError;
-      if (encoder.encodeQueueSize >= MAX_ENCODER_QUEUE_SIZE) await encoder.flush();
-      onProgress?.((frameIndex + 1) / frameCount);
+      await waitForEncoderCapacity(encoder, signal);
+      if (encoderError) throw encoderError;
+      const progress = (frameIndex + 1) / frameCount;
+      const progressPercent = Math.floor(progress * 100);
+      if (progressPercent !== lastReportedPercent || frameIndex + 1 === frameCount) {
+        lastReportedPercent = progressPercent;
+        onProgress?.(progress);
+      }
     }
 
     await encoder.flush();

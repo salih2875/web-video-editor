@@ -82,6 +82,11 @@ export const VideoPlayer: React.FC = () => {
   const audioRefs = useRef(new Map<string, HTMLAudioElement>());
   const rendererRef = useRef<PixiTimelineRenderer | null>(null);
   const frameRef = useRef<number | null>(null);
+  const activeMediaRef = useRef<{ videoId: string | null; audioId: string | null }>({
+    videoId: null,
+    audioId: null,
+  });
+  const bufferingRef = useRef(false);
   const [isBuffering, setIsBuffering] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const pendingPlayRef = useRef(new WeakSet<HTMLMediaElement>());
@@ -131,6 +136,28 @@ export const VideoPlayer: React.FC = () => {
     const snapshot = snapshotRef.current;
     renderer.renderTimelineFrame(timelineTime, snapshot.clips, snapshot.effects);
   }, []);
+
+  useEffect(() => {
+    const callbackIds = new Map<HTMLVideoElement, number>();
+    const schedule = (id: string, video: HTMLVideoElement) => {
+      if (!("requestVideoFrameCallback" in video)) return;
+      const callbackId = video.requestVideoFrameCallback(() => {
+        const snapshot = snapshotRef.current;
+        const activeClip = getTopTimelineItem(clockRef.current.timelineTime, snapshot.clips);
+        if (snapshot.isPlaying && activeClip?.id === id) {
+          renderTimeline(clockRef.current.timelineTime);
+        }
+        schedule(id, video);
+      });
+      callbackIds.set(video, callbackId);
+    };
+    videoRefs.current.forEach((video, id) => schedule(id, video));
+    return () => {
+      callbackIds.forEach((callbackId, video) => {
+        video.cancelVideoFrameCallback(callbackId);
+      });
+    };
+  }, [clips, renderTimeline]);
 
   const handleVideoReady = useCallback((id: string) => {
     const snapshot = snapshotRef.current;
@@ -198,15 +225,18 @@ export const VideoPlayer: React.FC = () => {
       ? audioRefs.current.get(activeAudio.id) ?? null
       : null;
 
-    snapshot.clips.forEach((clip) => {
-      const video = videoRefs.current.get(clip.id);
-      if (!video) return;
-      const active = clip.id === activeVideo?.id;
-      if (!active) {
-        if (!video.paused) video.pause();
-        return;
-      }
-      const desiredSeconds = (clip.clipStart + timelineTime - clip.timelineStart) / 1000;
+    if (activeMediaRef.current.videoId !== (activeVideo?.id ?? null)) {
+      const previousVideo = activeMediaRef.current.videoId
+        ? videoRefs.current.get(activeMediaRef.current.videoId)
+        : null;
+      if (previousVideo && !previousVideo.paused) previousVideo.pause();
+      activeMediaRef.current.videoId = activeVideo?.id ?? null;
+    }
+    if (activeVideo && activeVideoElement) {
+      const desiredSeconds = (
+        activeVideo.clipStart + timelineTime - activeVideo.timelineStart
+      ) / 1000;
+      const video = activeVideoElement;
       const drift = Math.abs(video.currentTime - desiredSeconds);
       if (video.readyState >= HTMLMediaElement.HAVE_METADATA
         && drift > (forceSeek ? 0.01 : PLAYBACK_DRIFT_TOLERANCE_SECONDS)) {
@@ -214,25 +244,38 @@ export const VideoPlayer: React.FC = () => {
       }
       videoReady = !video.seeking
         && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
-    });
-    renderTimeline(timelineTime);
+    }
+    if (!shouldPlay
+      || !activeVideoElement
+      || !("requestVideoFrameCallback" in activeVideoElement)) {
+      renderTimeline(timelineTime);
+    }
 
-    snapshot.audioClips.forEach((clip) => {
-      const audio = audioRefs.current.get(clip.id);
-      if (!audio) return;
-      const active = clip.id === activeAudio?.id;
-      audio.dataset.active = String(active);
-      if (!active) {
-        if (!audio.paused) audio.pause();
-        return;
+    if (activeMediaRef.current.audioId !== (activeAudio?.id ?? null)) {
+      const previousAudio = activeMediaRef.current.audioId
+        ? audioRefs.current.get(activeMediaRef.current.audioId)
+        : null;
+      if (previousAudio) {
+        previousAudio.dataset.active = "false";
+        if (!previousAudio.paused) previousAudio.pause();
       }
-      const desiredSeconds = (clip.clipStart + timelineTime - clip.timelineStart) / 1000;
-      const localTime = timelineTime - clip.timelineStart;
-      const remaining = clip.timelineEnd - timelineTime;
-      const fadeInGain = clip.fadeIn > 0 ? Math.min(1, localTime / clip.fadeIn) : 1;
-      const fadeOutGain = clip.fadeOut > 0 ? Math.min(1, remaining / clip.fadeOut) : 1;
-      audio.volume = Math.max(0, Math.min(1, clip.volume * fadeInGain * fadeOutGain));
-      audio.muted = clip.muted;
+      activeMediaRef.current.audioId = activeAudio?.id ?? null;
+      if (activeAudioElement) activeAudioElement.dataset.active = "true";
+    }
+    if (activeAudio && activeAudioElement) {
+      const desiredSeconds = (
+        activeAudio.clipStart + timelineTime - activeAudio.timelineStart
+      ) / 1000;
+      const localTime = timelineTime - activeAudio.timelineStart;
+      const remaining = activeAudio.timelineEnd - timelineTime;
+      const fadeInGain = activeAudio.fadeIn > 0 ? Math.min(1, localTime / activeAudio.fadeIn) : 1;
+      const fadeOutGain = activeAudio.fadeOut > 0 ? Math.min(1, remaining / activeAudio.fadeOut) : 1;
+      const audio = activeAudioElement;
+      audio.volume = Math.max(0, Math.min(
+        1,
+        activeAudio.volume * fadeInGain * fadeOutGain,
+      ));
+      audio.muted = activeAudio.muted;
       const drift = Math.abs(audio.currentTime - desiredSeconds);
       if (audio.readyState >= HTMLMediaElement.HAVE_METADATA
         && drift > (forceSeek ? 0.01 : PLAYBACK_DRIFT_TOLERANCE_SECONDS)) {
@@ -240,10 +283,14 @@ export const VideoPlayer: React.FC = () => {
       }
       audioReady = !audio.seeking
         && audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
-    });
+    }
 
     const mediaReady = videoReady && audioReady;
-    setIsBuffering(Boolean(activeVideo || activeAudio) && !mediaReady);
+    const isMediaBuffering = Boolean(activeVideo || activeAudio) && !mediaReady;
+    if (bufferingRef.current !== isMediaBuffering) {
+      bufferingRef.current = isMediaBuffering;
+      setIsBuffering(isMediaBuffering);
+    }
 
     if (!shouldPlay) {
       if (activeVideoElement && !activeVideoElement.paused) activeVideoElement.pause();
