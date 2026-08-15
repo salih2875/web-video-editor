@@ -16,7 +16,11 @@ import type {
   EffectName,
   MediaSelection,
 } from "../types/editor";
-import { loadProjectSnapshot, saveProjectSnapshot } from "../utils/projectStorage";
+import {
+  loadProjectSnapshot,
+  releaseCachedProjectAsset,
+  saveProjectSnapshot,
+} from "../utils/projectStorage";
 import {
   createAudioPeaks,
   createAudioPeaksIfPresent,
@@ -90,10 +94,12 @@ interface HistorySnapshot {
 }
 
 const captureSnapshot = (source: EditorState): HistorySnapshot => ({
-  clips: source.clips.map((clip) => ({ ...clip, transform: { ...clip.transform } })),
-  audioClips: source.audioClips.map((clip) => ({ ...clip, peaks: [...clip.peaks] })),
-  effects: source.effects.map((effect) => ({ ...effect })),
-  selectedItem: source.selectedItem ? { ...source.selectedItem } : null,
+  // Editor updates replace arrays and changed records instead of mutating them,
+  // so snapshots can safely share immutable clip metadata, thumbnails, and peaks.
+  clips: source.clips,
+  audioClips: source.audioClips,
+  effects: source.effects,
+  selectedItem: source.selectedItem,
 });
 
 const selectionExists = (
@@ -298,8 +304,32 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
   }, [recordHistory, updateState]);
 
   useEffect(() => () => {
-    objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    objectUrlsRef.current.forEach((url) => {
+      URL.revokeObjectURL(url);
+      releaseCachedProjectAsset(url);
+    });
   }, []);
+
+  useEffect(() => {
+    const retainedUrls = new Set<string>();
+    const retainClips = (clips: Clip[], audioClips: AudioClip[]) => {
+      clips.forEach((clip) => retainedUrls.add(clip.clipURL));
+      audioClips.forEach((clip) => retainedUrls.add(clip.clipURL));
+    };
+    retainClips(state.clips, state.audioClips);
+    historyRef.current.forEach((snapshot) => {
+      retainClips(snapshot.clips, snapshot.audioClips);
+    });
+    futureRef.current.forEach((snapshot) => {
+      retainClips(snapshot.clips, snapshot.audioClips);
+    });
+    objectUrlsRef.current.forEach((url) => {
+      if (retainedUrls.has(url)) return;
+      URL.revokeObjectURL(url);
+      releaseCachedProjectAsset(url);
+      objectUrlsRef.current.delete(url);
+    });
+  }, [state.audioClips, state.clips]);
 
   const seek = useCallback((time: number) => {
     const totalDuration = stateRef.current.totalDuration;
@@ -444,7 +474,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
           timelineStart: audio.timelineStart + offset,
           timelineEnd: audio.timelineEnd + offset,
           zIndex: nextAudioZIndex + index,
-          peaks: [...audio.peaks],
+          peaks: audio.peaks,
         }));
       updateState({
         clips: [...current.clips, duplicate],
@@ -468,7 +498,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
       timelineEnd: source.timelineEnd + 250,
       zIndex: getNextZIndex(current.audioClips),
       sourceVideoClipId: undefined,
-      peaks: [...source.peaks],
+      peaks: source.peaks,
     };
     updateState({
       audioClips: [...current.audioClips, duplicate],

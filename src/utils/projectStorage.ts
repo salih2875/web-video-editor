@@ -17,6 +17,10 @@ interface StoredProject {
 
 const assetBlobCache = new Map<string, Promise<Blob>>();
 
+export const releaseCachedProjectAsset = (url: string) => {
+  assetBlobCache.delete(url);
+};
+
 export const normalizeStoredEffects = (
   effects: StoredProject["effects"],
 ): Effect[] => (effects ?? []).flatMap((effect) =>
