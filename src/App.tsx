@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useCallback, useState } from "react";
-import { EditorProvider, useEditor } from "./context/EditorContext";
+import { EditorProvider, useEditorMediaActions } from "./context/EditorContext";
 import { MediaUpload } from "./components/MediaUpload/MediaUpload";
 import { VideoPlayer } from "./components/VideoPlayer/VideoPlayer";
 import { ControlPanel } from "./components/ControlPanel/ControlPanel";
@@ -27,7 +27,7 @@ const INITIAL_PANEL_NAVIGATION: PanelNavigationState = {
 };
 
 const EditorShell: React.FC = () => {
-  const { setVideoFile, setAudioFile } = useEditor();
+  const { setVideoFile, setAudioFile } = useEditorMediaActions();
   const [panelNavigation, setPanelNavigation] = useState(INITIAL_PANEL_NAVIGATION);
   const [isDragging, setIsDragging] = useState(false);
 

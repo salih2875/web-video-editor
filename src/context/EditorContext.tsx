@@ -55,6 +55,32 @@ const initialEditorState: EditorState = {
 };
 
 const EditorContext = createContext<EditorContextType | undefined>(undefined);
+type EditorMediaActions = Pick<EditorContextType, "setVideoFile" | "setAudioFile">;
+type EditorExportData = Pick<
+  EditorContextType,
+  "clips" | "audioClips" | "effects" | "totalDuration"
+>;
+type EditorPropertiesData = Pick<
+  EditorContextType,
+  | "clips"
+  | "audioClips"
+  | "selectedItem"
+  | "updateVideoClip"
+  | "updateAudioClip"
+  | "bringToFront"
+  | "duplicateSelected"
+  | "deleteSelected"
+  | "saveProject"
+  | "setProjectName"
+  | "projectName"
+  | "isDirty"
+  | "loopPlayback"
+  | "setLoopPlayback"
+  | "selectItem"
+>;
+const EditorMediaActionsContext = createContext<EditorMediaActions | undefined>(undefined);
+const EditorExportDataContext = createContext<EditorExportData | undefined>(undefined);
+const EditorPropertiesContext = createContext<EditorPropertiesData | undefined>(undefined);
 
 const makeId = (prefix: string) =>
   `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -764,6 +790,10 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     updateState({ projectName, isDirty: true });
   }, [updateState]);
 
+  const setLoopPlayback = useCallback((loopPlayback: boolean) => {
+    updateState({ loopPlayback });
+  }, [updateState]);
+
   const toggleEffect = useCallback((clipId: string, effectName: EffectName) => {
     const current = stateRef.current;
     if (!current.clips.some((clip) => clip.id === clipId)) return;
@@ -853,7 +883,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     setMediaError: (mediaError) => updateState({ mediaError }),
     toggleEffect,
     setSnapEnabled: (snapEnabled) => updateState({ snapEnabled }),
-    setLoopPlayback: (loopPlayback) => updateState({ loopPlayback }),
+    setLoopPlayback,
     play: () => {
       if (stateRef.current.totalDuration > 0) updateState({ isPlaying: true });
     },
@@ -881,6 +911,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     undo,
     redo,
     setProjectName,
+    setLoopPlayback,
     saveProject,
     loadAutosave,
     toggleEffect,
@@ -890,12 +921,87 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     updateState,
   ]);
 
-  return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;
+  const mediaActions = useMemo<EditorMediaActions>(() => ({
+    setVideoFile,
+    setAudioFile,
+  }), [setAudioFile, setVideoFile]);
+
+  const exportData = useMemo<EditorExportData>(() => ({
+    clips: state.clips,
+    audioClips: state.audioClips,
+    effects: state.effects,
+    totalDuration: state.totalDuration,
+  }), [state.audioClips, state.clips, state.effects, state.totalDuration]);
+
+  const propertiesData = useMemo<EditorPropertiesData>(() => ({
+    clips: state.clips,
+    audioClips: state.audioClips,
+    selectedItem: state.selectedItem,
+    updateVideoClip,
+    updateAudioClip,
+    bringToFront,
+    duplicateSelected,
+    deleteSelected,
+    saveProject,
+    setProjectName,
+    projectName: state.projectName,
+    isDirty: state.isDirty,
+    loopPlayback: state.loopPlayback,
+    setLoopPlayback,
+    selectItem,
+  }), [
+    state.clips,
+    state.audioClips,
+    state.selectedItem,
+    state.projectName,
+    state.isDirty,
+    state.loopPlayback,
+    updateVideoClip,
+    updateAudioClip,
+    bringToFront,
+    duplicateSelected,
+    deleteSelected,
+    saveProject,
+    setProjectName,
+    setLoopPlayback,
+    selectItem,
+  ]);
+
+  return (
+    <EditorMediaActionsContext.Provider value={mediaActions}>
+      <EditorExportDataContext.Provider value={exportData}>
+        <EditorPropertiesContext.Provider value={propertiesData}>
+          <EditorContext.Provider value={value}>{children}</EditorContext.Provider>
+        </EditorPropertiesContext.Provider>
+      </EditorExportDataContext.Provider>
+    </EditorMediaActionsContext.Provider>
+  );
 };
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const useEditor = (): EditorContextType => {
   const context = useContext(EditorContext);
   if (!context) throw new Error("useEditor must be used within an EditorProvider");
+  return context;
+};
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const useEditorMediaActions = (): EditorMediaActions => {
+  const context = useContext(EditorMediaActionsContext);
+  if (!context) throw new Error("useEditorMediaActions must be used within an EditorProvider");
+  return context;
+};
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const useEditorExportData = (): EditorExportData => {
+  const context = useContext(EditorExportDataContext);
+  if (!context) throw new Error("useEditorExportData must be used within an EditorProvider");
+  return context;
+};
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const useEditorProperties = (): EditorPropertiesData => {
+  const context = useContext(EditorPropertiesContext);
+  if (!context) throw new Error("useEditorProperties must be used within an EditorProvider");
   return context;
 };

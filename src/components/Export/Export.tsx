@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useEditor } from "../../context/EditorContext";
+import { useEditorExportData } from "../../context/EditorContext";
 import type { ExportPhase } from "../../utils/pixiExportService";
 import styles from "./Export.module.css";
 
@@ -24,7 +24,7 @@ const PHASE_LABELS: Record<ExportPhase, string> = {
 };
 
 export const Export = () => {
-  const { clips, audioClips, effects, totalDuration } = useEditor();
+  const { clips, audioClips, effects, totalDuration } = useEditorExportData();
   const [quality, setQuality] = useState<Quality>("medium");
   const [isExporting, setIsExporting] = useState(false);
   const [progress, setProgress] = useState(0);

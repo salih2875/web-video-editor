@@ -1,4 +1,4 @@
-import { useEditor } from "../../context/EditorContext";
+import { useEditorProperties } from "../../context/EditorContext";
 import styles from "./PropertiesPanel.module.css";
 
 const parseNumber = (value: string, fallback: number) => {
@@ -7,7 +7,7 @@ const parseNumber = (value: string, fallback: number) => {
 };
 
 export const PropertiesPanel = () => {
-  const editor = useEditor();
+  const editor = useEditorProperties();
   const {
     clips,
     audioClips,
