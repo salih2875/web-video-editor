@@ -122,7 +122,9 @@ const validateOutput = (output) => {
   const durationSeconds = Number(durationMatch[1]) * 3600
     + Number(durationMatch[2]) * 60
     + Number(durationMatch[3]);
-  if (Math.abs(durationSeconds - DURATION_SECONDS) > 0.05) {
+  // Raw Annex-B H.264 plus AAC priming can extend the MP4 container timeline
+  // by a few frames even when FFmpeg receives an exact -t value.
+  if (Math.abs(durationSeconds - DURATION_SECONDS) > 0.15) {
     throw new Error(`Unexpected export duration: ${durationSeconds}s`);
   }
   runFFmpeg(["-i", output, "-map", "0:v:0", "-map", "0:a:0", "-f", "null", "NUL"]);
