@@ -1,6 +1,6 @@
-import { Application, Sprite, Texture, filters, type Filter } from "pixi.js";
+import { Application, Sprite, Text, Texture, filters, type Filter } from "pixi.js";
 import { applyColorMatrixEffect } from "../effects/applyColorMatrixEffect";
-import type { Clip, Effect, EffectName } from "../types/editor";
+import type { Clip, Effect, EffectName, TextClip } from "../types/editor";
 import { getTopTimelineItem } from "../utils/timelineMath";
 
 export const PREVIEW_WIDTH = 1280;
@@ -59,6 +59,7 @@ export class PixiTimelineRenderer {
   private effectsReference: Effect[] | null = null;
   private readonly effectSignatureByClipId = new Map<string, string>();
   private visibleSprite: Sprite | null = null;
+  private readonly textResources = new Map<string, { display: Text; signature: string }>();
   private destroyed = false;
 
   constructor({ width, height }: PixiTimelineRendererOptions) {
@@ -96,19 +97,21 @@ export class PixiTimelineRenderer {
     timelineTimeMs: number,
     clips: Clip[],
     effects: Effect[],
+    textClips: TextClip[] = [],
     activeClipOverride?: Clip | null,
   ): TimelineRenderResult {
     this.assertAvailable();
     const activeClip = activeClipOverride === undefined
       ? getTopTimelineItem(timelineTimeMs, clips)
       : activeClipOverride;
-    if (!activeClip) {
-      this.clear();
-      return { activeClip: null, rendered: true };
-    }
+    let rendered = true;
+    if (!activeClip) this.hideVideo();
+    else rendered = this.renderClip(activeClip, effects);
+    this.renderTextClips(timelineTimeMs, textClips);
+    this.app.renderer.render(this.app.stage);
     return {
       activeClip,
-      rendered: this.renderClip(activeClip, effects),
+      rendered,
     };
   }
 
@@ -118,6 +121,7 @@ export class PixiTimelineRenderer {
       this.visibleSprite.parent?.removeChild(this.visibleSprite);
       this.visibleSprite = null;
     }
+    this.textResources.forEach(({ display }) => display.parent?.removeChild(display));
     this.app.renderer.render(this.app.stage);
   }
 
@@ -132,6 +136,8 @@ export class PixiTimelineRenderer {
     });
     this.resources.clear();
     this.videoByClipId.clear();
+    this.textResources.forEach(({ display }) => display.destroy());
+    this.textResources.clear();
     this.visibleSprite = null;
     this.app.destroy(true, { children: true });
   }
@@ -179,8 +185,59 @@ export class PixiTimelineRenderer {
       this.app.stage.addChild(sprite);
       this.visibleSprite = sprite;
     }
-    this.app.renderer.render(this.app.stage);
     return true;
+  }
+
+  private renderTextClips(timelineTimeMs: number, textClips: TextClip[]) {
+    const activeIds = new Set<string>();
+    textClips
+      .filter((clip) => timelineTimeMs >= clip.timelineStart && timelineTimeMs < clip.timelineEnd)
+      .sort((a, b) => a.zIndex - b.zIndex)
+      .forEach((clip) => {
+        activeIds.add(clip.id);
+        const signature = [
+          clip.text, clip.fontFamily, clip.fontSize, clip.color, clip.opacity,
+          clip.rotation, clip.align, clip.fontWeight, clip.fontStyle,
+        ].join("|");
+        let resource = this.textResources.get(clip.id);
+        if (!resource) {
+          resource = { display: new Text(), signature: "" };
+          resource.display.anchor.set(0.5);
+          this.textResources.set(clip.id, resource);
+        }
+        if (resource.signature !== signature) {
+          const scale = Math.min(
+            this.app.screen.width / PREVIEW_WIDTH,
+            this.app.screen.height / PREVIEW_HEIGHT,
+          );
+          resource.display.text = clip.text;
+          resource.display.style = {
+            fontFamily: clip.fontFamily,
+            fontSize: clip.fontSize * scale,
+            fill: clip.color,
+            align: clip.align,
+            fontWeight: clip.fontWeight,
+            fontStyle: clip.fontStyle,
+            wordWrap: true,
+            wordWrapWidth: this.app.screen.width * 0.9,
+          };
+          resource.display.alpha = clip.opacity;
+          resource.display.rotation = clip.rotation * Math.PI / 180;
+          resource.signature = signature;
+        }
+        resource.display.x = clip.x * this.app.screen.width / PREVIEW_WIDTH;
+        resource.display.y = clip.y * this.app.screen.height / PREVIEW_HEIGHT;
+        this.app.stage.addChild(resource.display);
+      });
+    this.textResources.forEach(({ display }, id) => {
+      if (!activeIds.has(id)) display.parent?.removeChild(display);
+    });
+  }
+
+  private hideVideo() {
+    if (!this.visibleSprite) return;
+    this.visibleSprite.parent?.removeChild(this.visibleSprite);
+    this.visibleSprite = null;
   }
 
   private getResource(video: HTMLVideoElement) {

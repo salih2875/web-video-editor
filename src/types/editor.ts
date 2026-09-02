@@ -44,9 +44,33 @@ export interface AudioClip {
   sourceVideoClipId?: string;
 }
 
+export interface TextClip {
+  id: string;
+  name: string;
+  text: string;
+  zIndex: number;
+  timelineStart: number;
+  timelineEnd: number;
+  clipStart: number;
+  clipEnd: number;
+  clipDuration: number;
+  sourceDuration: number;
+  x: number;
+  y: number;
+  fontFamily: string;
+  fontSize: number;
+  color: string;
+  opacity: number;
+  rotation: number;
+  align: "left" | "center" | "right";
+  fontWeight: "normal" | "bold";
+  fontStyle: "normal" | "italic";
+}
+
 export type MediaSelection =
   | { type: "video"; id: string }
-  | { type: "audio"; id: string };
+  | { type: "audio"; id: string }
+  | { type: "text"; id: string };
 
 export interface Effect {
   clipId: string;
@@ -56,6 +80,7 @@ export interface Effect {
 export interface EditorState {
   clips: Clip[];
   audioClips: AudioClip[];
+  textClips: TextClip[];
   effects: Effect[];
   selectedItem: MediaSelection | null;
   totalDuration: number;
@@ -79,9 +104,12 @@ export interface EditorContextType extends EditorState {
   setAudioFile: (file: File | null) => Promise<void>;
   removeVideoClip: (id: string) => void;
   removeAudioClip: (id: string) => void;
+  addTextClip: () => void;
+  removeTextClip: (id: string) => void;
   selectItem: (selection: MediaSelection | null) => void;
   updateVideoClip: (id: string, patch: Partial<Clip>) => void;
   updateAudioClip: (id: string, patch: Partial<AudioClip>) => void;
+  updateTextClip: (id: string, patch: Partial<TextClip>) => void;
   bringToFront: (selection: MediaSelection) => void;
   duplicateSelected: () => void;
   deleteSelected: () => void;

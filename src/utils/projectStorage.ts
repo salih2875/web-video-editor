@@ -1,5 +1,5 @@
 import { isEffectName } from "../effects/effectCatalog";
-import type { AudioClip, Clip, EditorState, Effect } from "../types/editor";
+import type { AudioClip, Clip, EditorState, Effect, TextClip } from "../types/editor";
 
 const DATABASE_NAME = "pixi-video-editor";
 const STORE_NAME = "projects";
@@ -11,6 +11,7 @@ interface StoredProject {
   savedAt: number;
   clips: Clip[];
   audioClips: AudioClip[];
+  textClips?: TextClip[];
   effects?: Array<{ clipId?: unknown; name?: unknown }>;
   assets: Array<{ url: string; blob: Blob }>;
 }
@@ -62,6 +63,7 @@ export const saveProjectSnapshot = async (state: EditorState): Promise<void> => 
     savedAt: Date.now(),
     clips: state.clips.map((clip) => ({ ...clip, thumbnail: null })),
     audioClips: state.audioClips,
+    textClips: state.textClips,
     effects: state.effects,
     assets,
   };
@@ -84,6 +86,7 @@ export const loadProjectSnapshot = async (): Promise<{
   name: string;
   clips: Clip[];
   audioClips: AudioClip[];
+  textClips: TextClip[];
   effects: Effect[];
 } | null> => {
   const database = await openDatabase();
@@ -121,6 +124,22 @@ export const loadProjectSnapshot = async (): Promise<{
       fadeIn: clip.fadeIn ?? 0,
       fadeOut: clip.fadeOut ?? 0,
       clipURL: urlMap.get(clip.clipURL) ?? clip.clipURL,
+    })),
+    textClips: (project.textClips ?? []).map((clip, index) => ({
+      ...clip,
+      name: clip.name || `Text ${index + 1}`,
+      text: clip.text || "Text",
+      zIndex: Number.isFinite(clip.zIndex) ? clip.zIndex : index,
+      x: Number.isFinite(clip.x) ? clip.x : 640,
+      y: Number.isFinite(clip.y) ? clip.y : 360,
+      fontFamily: clip.fontFamily || "Arial",
+      fontSize: Number.isFinite(clip.fontSize) ? clip.fontSize : 64,
+      color: clip.color || "#ffffff",
+      opacity: Number.isFinite(clip.opacity) ? clip.opacity : 1,
+      rotation: Number.isFinite(clip.rotation) ? clip.rotation : 0,
+      align: clip.align ?? "center",
+      fontWeight: clip.fontWeight ?? "normal",
+      fontStyle: clip.fontStyle ?? "normal",
     })),
   };
 };

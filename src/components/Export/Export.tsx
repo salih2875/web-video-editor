@@ -24,7 +24,7 @@ const PHASE_LABELS: Record<ExportPhase, string> = {
 };
 
 export const Export = () => {
-  const { clips, audioClips, effects, totalDuration } = useEditorExportData();
+  const { clips, audioClips, textClips, effects, totalDuration } = useEditorExportData();
   const [quality, setQuality] = useState<Quality>("medium");
   const [isExporting, setIsExporting] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -58,6 +58,7 @@ export const Export = () => {
       const url = await exportTimeline({
         clips,
         audioClips,
+        textClips,
         effects,
         duration: totalDuration,
         ...PRESETS[quality],

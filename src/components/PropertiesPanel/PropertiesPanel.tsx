@@ -11,9 +11,12 @@ export const PropertiesPanel = () => {
   const {
     clips,
     audioClips,
+    textClips,
     selectedItem,
     updateVideoClip,
     updateAudioClip,
+    updateTextClip,
+    addTextClip,
     bringToFront,
     duplicateSelected,
     deleteSelected,
@@ -29,6 +32,9 @@ export const PropertiesPanel = () => {
     : undefined;
   const audio = selectedItem?.type === "audio"
     ? audioClips.find((clip) => clip.id === selectedItem.id)
+    : undefined;
+  const text = selectedItem?.type === "text"
+    ? textClips.find((clip) => clip.id === selectedItem.id)
     : undefined;
 
   return (
@@ -55,6 +61,7 @@ export const PropertiesPanel = () => {
 
       <section>
         <h3>Media library</h3>
+        <button className={styles.addText} onClick={addTextClip}>＋ Add text</button>
         <div className={styles.mediaList}>
           {clips.map((clip) => (
             <button
@@ -72,7 +79,16 @@ export const PropertiesPanel = () => {
               ♫ {clip.name}
             </button>
           ))}
-          {!clips.length && !audioClips.length && <p>Drop files into the editor.</p>}
+          {textClips.map((clip) => (
+            <button
+              key={clip.id}
+              onClick={() => editor.selectItem({ type: "text", id: clip.id })}
+            >
+              T {clip.name}
+            </button>
+          ))}
+          {!clips.length && !audioClips.length && !textClips.length
+            && <p>Drop files into the editor or add text.</p>}
         </div>
       </section>
 
@@ -249,6 +265,98 @@ export const PropertiesPanel = () => {
             <button onClick={() => bringToFront({ type: "audio", id: audio.id })}>
               Bring to front
             </button>
+            <button onClick={duplicateSelected}>Duplicate</button>
+            <button className={styles.danger} onClick={deleteSelected}>Delete</button>
+          </div>
+        </section>
+      )}
+
+      {text && (
+        <section>
+          <h3>Text overlay</h3>
+          <label>
+            Text
+            <textarea
+              rows={3}
+              value={text.text}
+              onChange={(event) => updateTextClip(text.id, {
+                text: event.target.value,
+                name: event.target.value.split("\n")[0].slice(0, 30) || "Text",
+              })}
+            />
+          </label>
+          <div className={styles.grid}>
+            <label>
+              X
+              <input type="number" min="0" max="1280" value={text.x} onChange={(event) => updateTextClip(text.id, {
+                x: Math.max(0, Math.min(1280, parseNumber(event.target.value, text.x))),
+              })} />
+            </label>
+            <label>
+              Y
+              <input type="number" min="0" max="720" value={text.y} onChange={(event) => updateTextClip(text.id, {
+                y: Math.max(0, Math.min(720, parseNumber(event.target.value, text.y))),
+              })} />
+            </label>
+            <label>
+              Size
+              <input type="number" min="8" max="300" value={text.fontSize} onChange={(event) => updateTextClip(text.id, {
+                fontSize: Math.max(8, Math.min(300, parseNumber(event.target.value, text.fontSize))),
+              })} />
+            </label>
+            <label>
+              Rotation
+              <input type="number" value={text.rotation} onChange={(event) => updateTextClip(text.id, {
+                rotation: parseNumber(event.target.value, text.rotation),
+              })} />
+            </label>
+          </div>
+          <label>
+            Font
+            <select value={text.fontFamily} onChange={(event) => updateTextClip(text.id, { fontFamily: event.target.value })}>
+              <option value="Arial">Arial</option>
+              <option value="Georgia">Georgia</option>
+              <option value="Verdana">Verdana</option>
+              <option value="Tahoma">Tahoma</option>
+              <option value="Trebuchet MS">Trebuchet</option>
+              <option value="Courier New">Courier New</option>
+              <option value="Impact">Impact</option>
+            </select>
+          </label>
+          <div className={styles.grid}>
+            <label>
+              Color
+              <input type="color" value={text.color} onChange={(event) => updateTextClip(text.id, { color: event.target.value })} />
+            </label>
+            <label>
+              Alignment
+              <select value={text.align} onChange={(event) => updateTextClip(text.id, {
+                align: event.target.value as "left" | "center" | "right",
+              })}>
+                <option value="left">Left</option>
+                <option value="center">Center</option>
+                <option value="right">Right</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            Opacity {Math.round(text.opacity * 100)}%
+            <input type="range" min="0" max="1" step="0.01" value={text.opacity} onChange={(event) => updateTextClip(text.id, {
+              opacity: Math.max(0, Math.min(1, parseNumber(event.target.value, text.opacity))),
+            })} />
+          </label>
+          <div className={styles.toggleRow}>
+            <button
+              className={text.fontWeight === "bold" ? styles.active : ""}
+              onClick={() => updateTextClip(text.id, { fontWeight: text.fontWeight === "bold" ? "normal" : "bold" })}
+            >Bold</button>
+            <button
+              className={text.fontStyle === "italic" ? styles.active : ""}
+              onClick={() => updateTextClip(text.id, { fontStyle: text.fontStyle === "italic" ? "normal" : "italic" })}
+            >Italic</button>
+          </div>
+          <div className={styles.actions}>
+            <button onClick={() => bringToFront({ type: "text", id: text.id })}>Bring to front</button>
             <button onClick={duplicateSelected}>Duplicate</button>
             <button className={styles.danger} onClick={deleteSelected}>Delete</button>
           </div>

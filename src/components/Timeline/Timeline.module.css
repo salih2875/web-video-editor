@@ -54,6 +54,7 @@
 }
 
 .audioTrack { background: #222b31; }
+.textTrack { background: #292834; }
 
 .trackLabel {
   position: sticky;
@@ -72,7 +73,8 @@
 }
 
 .videoClip,
-.audioClip {
+.audioClip,
+.textClip {
   position: absolute;
   inset-block: 4px;
   min-width: 5px;
@@ -88,8 +90,20 @@
   background: #4b2858;
 }
 
+.textClip {
+  position: absolute;
+  inset-block: 4px;
+  min-width: 5px;
+  overflow: hidden;
+  border: 1px solid #e2bd51;
+  border-radius: 5px;
+  background: #64511d;
+  cursor: grab;
+}
+
 .videoClip:active,
-.audioClip:active { cursor: grabbing; }
+.audioClip:active,
+.textClip:active { cursor: grabbing; }
 
 .selectedClip {
   border-color: #ffd166;
@@ -109,7 +123,8 @@
 
 .selectedClip .trimHandle,
 .videoClip:hover .trimHandle,
-.audioClip:hover .trimHandle { opacity: 1; }
+.audioClip:hover .trimHandle,
+.textClip:hover .trimHandle { opacity: 1; }
 
 .trimStart { left: 0; }
 .trimEnd { right: 0; }
@@ -151,6 +166,7 @@
 
 .videoClip:hover .deleteClip,
 .audioClip:hover .deleteClip,
+.textClip:hover .deleteClip,
 .deleteClip:focus-visible { opacity: 1; }
 
 .deleteClip:hover { background: #d4384d; }
@@ -204,9 +220,15 @@
 }
 
 .audioPreview {
-  top: 89px;
+  top: 166px;
   border-color: #d18ae9;
   background: rgba(179, 107, 206, .18);
+}
+
+.textPreview {
+  top: 89px;
+  border-color: #e2bd51;
+  background: rgba(226, 189, 81, .18);
 }
 
 .placeholder,

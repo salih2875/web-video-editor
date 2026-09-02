@@ -1,4 +1,4 @@
-import type { AudioClip, Clip, Effect } from "../types/editor";
+import type { AudioClip, Clip, Effect, TextClip } from "../types/editor";
 import { OfflineVideoSourcePool } from "../rendering/OfflineVideoSourcePool";
 import {
   getExportFrameCount,
@@ -23,6 +23,7 @@ interface TimelineExportOptions {
   clips: Clip[];
   audioClips: AudioClip[];
   effects: Effect[];
+  textClips: TextClip[];
   duration: number;
   width: number;
   height: number;
@@ -35,6 +36,7 @@ interface TimelineExportOptions {
 interface RenderVideoOptions {
   clips: Clip[];
   effects: Effect[];
+  textClips: TextClip[];
   duration: number;
   width: number;
   height: number;
@@ -126,6 +128,7 @@ const getSupportedEncoderConfig = async (
 const renderTimelineVideo = async ({
   clips,
   effects,
+  textClips,
   duration,
   width,
   height,
@@ -178,7 +181,7 @@ const renderTimelineVideo = async ({
       const activeClip = getTopTimelineItem(timelineTime, clips);
       if (activeClip) await sources.seekToTimelineFrame(activeClip, timelineTime, signal);
 
-      const result = renderer.renderTimelineFrame(timelineTime, clips, effects, activeClip);
+      const result = renderer.renderTimelineFrame(timelineTime, clips, effects, textClips, activeClip);
       if (activeClip && (!result.rendered || result.activeClip?.id !== activeClip.id)) {
         throw new Error(`PIXI could not render a decoded frame for clip “${activeClip.name}”.`);
       }
@@ -218,6 +221,7 @@ export const exportTimeline = async ({
   clips,
   audioClips,
   effects,
+  textClips,
   duration,
   width,
   height,
@@ -233,6 +237,7 @@ export const exportTimeline = async ({
   const encodedVideo = await renderTimelineVideo({
     clips,
     effects,
+    textClips,
     duration,
     width,
     height,

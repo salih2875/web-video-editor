@@ -13,6 +13,7 @@ export const ControlPanel: React.FC = () => {
     splitAudioClip,
     duplicateSelected,
     deleteSelected,
+    addTextClip,
     isGeneratingThumbnails,
   } = useEditor();
   const selectedVideo = selectedItem?.type === "video"
@@ -21,7 +22,9 @@ export const ControlPanel: React.FC = () => {
   const selectedAudio = selectedItem?.type === "audio"
     ? audioClips.find((clip) => clip.id === selectedItem.id) ?? null
     : null;
-  const splitTarget = selectedItem?.type === "audio"
+  const splitTarget = selectedItem?.type === "text"
+    ? null
+    : selectedItem?.type === "audio"
     ? selectedAudio
     : selectedVideo ?? getTopTimelineItem(currentTime, clips);
   const splitOffset = splitTarget ? currentTime - splitTarget.timelineStart : 0;
@@ -32,6 +35,7 @@ export const ControlPanel: React.FC = () => {
   return (
     <div className={styles.controlPanel}>
       <div className={styles.editControls}>
+        <button onClick={addTextClip} title="Add a text overlay at the playhead">Add text</button>
         <button onClick={() => selectedItem?.type === "audio" ? splitAudioClip() : void splitClip()} disabled={!canSplit || isGeneratingThumbnails} title="Split selected clip at playhead (S)">Split</button>
         <button onClick={duplicateSelected} disabled={!selectedItem} title="Duplicate selected clip (Ctrl+D)">Duplicate</button>
         <button onClick={deleteSelected} disabled={!selectedItem} title="Delete selected clip (Delete)">Delete</button>

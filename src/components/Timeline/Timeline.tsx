@@ -1,6 +1,6 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEditor } from "../../context/EditorContext";
-import type { AudioClip, Clip, MediaSelection } from "../../types/editor";
+import type { AudioClip, Clip, MediaSelection, TextClip } from "../../types/editor";
 import { TimelineRuler } from "./TimelineRuler";
 import { ZoomControls } from "./ZoomControls";
 import styles from "./Timeline.module.css";
@@ -34,6 +34,7 @@ export const Timeline: React.FC = () => {
     totalDuration,
     clips,
     audioClips,
+    textClips,
     currentTime,
     timelineZoom,
     selectedItem,
@@ -48,8 +49,10 @@ export const Timeline: React.FC = () => {
     selectItem,
     updateVideoClip,
     updateAudioClip,
+    updateTextClip,
     removeVideoClip,
     removeAudioClip,
+    removeTextClip,
     bringToFront,
     undo,
     redo,
@@ -91,8 +94,9 @@ export const Timeline: React.FC = () => {
     const points = [0, currentTime];
     clips.forEach((clip) => { if (target.type !== "video" || clip.id !== target.id) points.push(clip.timelineStart, clip.timelineEnd); });
     audioClips.forEach((clip) => { if (target.type !== "audio" || clip.id !== target.id) points.push(clip.timelineStart, clip.timelineEnd); });
+    textClips.forEach((clip) => { if (target.type !== "text" || clip.id !== target.id) points.push(clip.timelineStart, clip.timelineEnd); });
     return (candidate: number) => snapToPoints(candidate, points, threshold);
-  }, [audioClips, clips, contentWidth, currentTime, displayDuration, snapEnabled]);
+  }, [audioClips, clips, textClips, contentWidth, currentTime, displayDuration, snapEnabled]);
 
   const handleSeek = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (!timelineRef.current || totalDuration <= 0) return;
@@ -103,7 +107,9 @@ export const Timeline: React.FC = () => {
 
   const getTarget = useCallback((target: DragTarget) => target.type === "video"
     ? clips.find((clip) => clip.id === target.id)
-    : audioClips.find((clip) => clip.id === target.id), [audioClips, clips]);
+    : target.type === "audio"
+      ? audioClips.find((clip) => clip.id === target.id)
+      : textClips.find((clip) => clip.id === target.id), [audioClips, clips, textClips]);
 
   const startDrag = useCallback((event: React.MouseEvent, target: DragTarget) => {
     event.stopPropagation();
@@ -139,11 +145,12 @@ export const Timeline: React.FC = () => {
       if (!moved) { seek(source.timelineStart); return; }
       const patch = { timelineStart: newStart, timelineEnd: newStart + duration };
       if (target.type === "video") updateVideoClip(target.id, patch);
-      else updateAudioClip(target.id, patch);
+      else if (target.type === "audio") updateAudioClip(target.id, patch);
+      else updateTextClip(target.id, patch);
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp, { once: true });
-  }, [createSnapper, displayDuration, getTarget, laneByZIndex, percent, seek, selectItem, updateAudioClip, updateVideoClip]);
+  }, [createSnapper, displayDuration, getTarget, laneByZIndex, percent, seek, selectItem, updateAudioClip, updateTextClip, updateVideoClip]);
 
   const startTrim = useCallback((event: React.MouseEvent, target: DragTarget, edge: TrimEdge) => {
     event.stopPropagation();
@@ -192,13 +199,14 @@ export const Timeline: React.FC = () => {
         clipDuration: timelineEnd - timelineStart,
       };
       if (target.type === "video") updateVideoClip(target.id, patch);
-      else updateAudioClip(target.id, patch);
+      else if (target.type === "audio") updateAudioClip(target.id, patch);
+      else updateTextClip(target.id, patch);
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp, { once: true });
-  }, [createSnapper, displayDuration, getTarget, laneByZIndex, percent, selectItem, updateAudioClip, updateVideoClip]);
+  }, [createSnapper, displayDuration, getTarget, laneByZIndex, percent, selectItem, updateAudioClip, updateTextClip, updateVideoClip]);
 
-  const hasMedia = clips.length > 0 || audioClips.length > 0;
+  const hasMedia = clips.length > 0 || audioClips.length > 0 || textClips.length > 0;
   return (
     <div className={styles.timelineWrapper} ref={wrapperRef}>
       <div className={styles.timelineToolbar}>
@@ -227,6 +235,18 @@ export const Timeline: React.FC = () => {
               })}
               {isGeneratingThumbnails && <span className={styles.trackStatus}>Generating thumbnails…</span>}
             </div>
+            <div className={`${styles.track} ${styles.textTrack}`}>
+              <span className={styles.trackLabel}>TEXT · overlays</span>
+              {textClips.map((clip: TextClip) => {
+                const selected = selectedItem?.type === "text" && selectedItem.id === clip.id;
+                return <div key={clip.id} className={`${styles.textClip} ${selected ? styles.selectedClip : ""}`} style={{ left: `${percent(clip.timelineStart)}%`, width: `${percent(clip.clipDuration)}%`, zIndex: clip.zIndex + 1 }} onMouseDown={(event) => startDrag(event, { type: "text", id: clip.id })} onContextMenu={(event) => { event.preventDefault(); bringToFront({ type: "text", id: clip.id }); }} title={`${clip.name} · text layer ${clip.zIndex}`}>
+                  <span className={styles.clipName}>T · {clip.text.replace(/\n/g, " ")}</span>
+                  <div className={`${styles.trimHandle} ${styles.trimStart}`} onMouseDown={(event) => startTrim(event, { type: "text", id: clip.id }, "start")} />
+                  <div className={`${styles.trimHandle} ${styles.trimEnd}`} onMouseDown={(event) => startTrim(event, { type: "text", id: clip.id }, "end")} />
+                  <button type="button" className={styles.deleteClip} aria-label={`Delete text ${clip.name}`} onMouseDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); removeTextClip(clip.id); }}>×</button>
+                </div>;
+              })}
+            </div>
             <div className={`${styles.track} ${styles.audioTrack}`} style={{ height: audioTrackHeight }}>
               <span className={styles.trackLabel}>AUDIO · highest lane plays</span>
               {audioClips.map((clip: AudioClip) => {
@@ -242,7 +262,7 @@ export const Timeline: React.FC = () => {
               {isLoadingAudio && <span className={styles.trackStatus}>Building waveform…</span>}
             </div>
             {hasMedia && <div className={styles.playhead} style={{ left: `${percent(currentTime)}%` }} />}
-            {dragPreview && <div className={`${styles.dragPreview} ${dragPreview.type === "audio" ? styles.audioPreview : ""}`} style={{ left: `${dragPreview.left}%`, width: `${dragPreview.width}%`, top: dragPreview.type === "audio" ? 89 + dragPreview.lane * 58 : 12 }} />}
+            {dragPreview && <div className={`${styles.dragPreview} ${dragPreview.type === "audio" ? styles.audioPreview : dragPreview.type === "text" ? styles.textPreview : ""}`} style={{ left: `${dragPreview.left}%`, width: `${dragPreview.width}%`, top: dragPreview.type === "audio" ? 166 + dragPreview.lane * 58 : dragPreview.type === "text" ? 89 : 12 }} />}
             {!hasMedia && <div className={styles.placeholder}>Drop video or audio here to start editing</div>}
           </div>
         </div>

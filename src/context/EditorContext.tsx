@@ -15,6 +15,7 @@ import type {
   EditorState,
   EffectName,
   MediaSelection,
+  TextClip,
 } from "../types/editor";
 import {
   loadProjectSnapshot,
@@ -36,6 +37,7 @@ const DEFAULT_TRANSFORM = { x: 0, y: 0, scale: 1, rotation: 0, fit: "contain" } 
 const initialEditorState: EditorState = {
   clips: [],
   audioClips: [],
+  textClips: [],
   effects: [],
   selectedItem: null,
   totalDuration: 0,
@@ -58,15 +60,18 @@ const EditorContext = createContext<EditorContextType | undefined>(undefined);
 type EditorMediaActions = Pick<EditorContextType, "setVideoFile" | "setAudioFile">;
 type EditorExportData = Pick<
   EditorContextType,
-  "clips" | "audioClips" | "effects" | "totalDuration"
+  "clips" | "audioClips" | "textClips" | "effects" | "totalDuration"
 >;
 type EditorPropertiesData = Pick<
   EditorContextType,
   | "clips"
   | "audioClips"
+  | "textClips"
   | "selectedItem"
   | "updateVideoClip"
   | "updateAudioClip"
+  | "updateTextClip"
+  | "addTextClip"
   | "bringToFront"
   | "duplicateSelected"
   | "deleteSelected"
@@ -94,15 +99,16 @@ const hasChanges = <T extends object>(source: T, patch: Partial<T>) =>
 const getNextZIndex = (items: Array<{ zIndex: number }>) =>
   items.reduce((highest, item) => Math.max(highest, item.zIndex), -1) + 1;
 
-const getTotalDuration = (clips: Clip[], audioClips: AudioClip[]) => {
+const getTotalDuration = (clips: Clip[], audioClips: AudioClip[], textClips: TextClip[]) => {
   let duration = 0;
   for (const clip of clips) duration = Math.max(duration, clip.timelineEnd);
   for (const clip of audioClips) duration = Math.max(duration, clip.timelineEnd);
+  for (const clip of textClips) duration = Math.max(duration, clip.timelineEnd);
   return duration;
 };
 
 const withTimelineMetrics = (state: EditorState): EditorState => {
-  const totalDuration = getTotalDuration(state.clips, state.audioClips);
+  const totalDuration = getTotalDuration(state.clips, state.audioClips, state.textClips);
   const currentTime = Math.min(state.currentTime, totalDuration);
   return {
     ...state,
@@ -115,6 +121,7 @@ const withTimelineMetrics = (state: EditorState): EditorState => {
 interface HistorySnapshot {
   clips: Clip[];
   audioClips: AudioClip[];
+  textClips: TextClip[];
   effects: EditorState["effects"];
   selectedItem: EditorState["selectedItem"];
 }
@@ -124,6 +131,7 @@ const captureSnapshot = (source: EditorState): HistorySnapshot => ({
   // so snapshots can safely share immutable clip metadata, thumbnails, and peaks.
   clips: source.clips,
   audioClips: source.audioClips,
+  textClips: source.textClips,
   effects: source.effects,
   selectedItem: source.selectedItem,
 });
@@ -132,9 +140,12 @@ const selectionExists = (
   selection: MediaSelection | null,
   clips: Clip[],
   audioClips: AudioClip[],
+  textClips: TextClip[],
 ) => !selection || (selection.type === "video"
   ? clips.some((clip) => clip.id === selection.id)
-  : audioClips.some((clip) => clip.id === selection.id));
+  : selection.type === "audio"
+    ? audioClips.some((clip) => clip.id === selection.id)
+    : textClips.some((clip) => clip.id === selection.id));
 
 export const EditorProvider = ({ children }: { children: ReactNode }) => {
   const [state, setState] = useState(initialEditorState);
@@ -156,7 +167,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
   const updateState = useCallback((patch: Partial<EditorState>) => {
     setState((previous) => {
       const next = { ...previous, ...patch };
-      return patch.clips || patch.audioClips ? withTimelineMetrics(next) : next;
+      return patch.clips || patch.audioClips || patch.textClips ? withTimelineMetrics(next) : next;
     });
   }, []);
 
@@ -175,7 +186,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
           clips: [],
           audioClips,
           effects: [],
-          selectedItem: selectionExists(previous.selectedItem, [], audioClips)
+          selectedItem: selectionExists(previous.selectedItem, [], audioClips, previous.textClips)
             ? previous.selectedItem
             : null,
           isDirty: true,
@@ -269,7 +280,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
         return withTimelineMetrics({
           ...previous,
           audioClips,
-          selectedItem: selectionExists(previous.selectedItem, previous.clips, audioClips)
+          selectedItem: selectionExists(previous.selectedItem, previous.clips, audioClips, previous.textClips)
             ? previous.selectedItem
             : null,
           isDirty: true,
@@ -372,7 +383,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     setState((previous) => {
       const clips = previous.clips.filter((clip) => clip.id !== id);
       const audioClips = previous.audioClips.filter((clip) => clip.sourceVideoClipId !== id);
-      const selectedItem = selectionExists(previous.selectedItem, clips, audioClips)
+      const selectedItem = selectionExists(previous.selectedItem, clips, audioClips, previous.textClips)
         ? previous.selectedItem
         : null;
       return withTimelineMetrics({
@@ -460,14 +471,85 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     }));
   }, [recordHistory]);
 
+  const addTextClip = useCallback(() => {
+    const current = stateRef.current;
+    recordHistory(current);
+    const timelineStart = current.currentTime;
+    const clipDuration = Math.max(1000, current.totalDuration - timelineStart || 5000);
+    const clip: TextClip = {
+      id: makeId("text"),
+      name: "Text",
+      text: "Your text",
+      zIndex: getNextZIndex(current.textClips),
+      timelineStart,
+      timelineEnd: timelineStart + clipDuration,
+      clipStart: 0,
+      clipEnd: clipDuration,
+      clipDuration,
+      sourceDuration: Number.MAX_SAFE_INTEGER,
+      x: 640,
+      y: 360,
+      fontFamily: "Arial",
+      fontSize: 64,
+      color: "#ffffff",
+      opacity: 1,
+      rotation: 0,
+      align: "center",
+      fontWeight: "normal",
+      fontStyle: "normal",
+    };
+    updateState({
+      textClips: [...current.textClips, clip],
+      selectedItem: { type: "text", id: clip.id },
+      isDirty: true,
+      canUndo: true,
+      canRedo: false,
+    });
+  }, [recordHistory, updateState]);
+
+  const updateTextClip = useCallback((id: string, patch: Partial<TextClip>) => {
+    const current = stateRef.current;
+    const original = current.textClips.find((clip) => clip.id === id);
+    if (!original || !hasChanges(original, patch)) return;
+    recordHistory(current);
+    setState((previous) => withTimelineMetrics({
+      ...previous,
+      textClips: previous.textClips.map((clip) =>
+        clip.id === id ? { ...clip, ...patch } : clip,
+      ),
+      isDirty: true,
+      canUndo: true,
+      canRedo: false,
+    }));
+  }, [recordHistory]);
+
+  const removeTextClip = useCallback((id: string) => {
+    const current = stateRef.current;
+    if (!current.textClips.some((clip) => clip.id === id)) return;
+    recordHistory(current);
+    setState((previous) => withTimelineMetrics({
+      ...previous,
+      textClips: previous.textClips.filter((clip) => clip.id !== id),
+      selectedItem: previous.selectedItem?.type === "text" && previous.selectedItem.id === id
+        ? null
+        : previous.selectedItem,
+      isDirty: true,
+      canUndo: true,
+      canRedo: false,
+      isSeeking: true,
+    }));
+  }, [recordHistory]);
+
   const bringToFront = useCallback((selection: MediaSelection) => {
     const current = stateRef.current;
     if (selection.type === "video") {
       updateVideoClip(selection.id, { zIndex: getNextZIndex(current.clips) });
-    } else {
+    } else if (selection.type === "audio") {
       updateAudioClip(selection.id, { zIndex: getNextZIndex(current.audioClips) });
+    } else {
+      updateTextClip(selection.id, { zIndex: getNextZIndex(current.textClips) });
     }
-  }, [updateAudioClip, updateVideoClip]);
+  }, [updateAudioClip, updateTextClip, updateVideoClip]);
 
   const duplicateSelected = useCallback(() => {
     const current = stateRef.current;
@@ -506,6 +588,30 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
         clips: [...current.clips, duplicate],
         audioClips: [...current.audioClips, ...linked],
         selectedItem: { type: "video", id },
+        isDirty: true,
+        canUndo: true,
+        canRedo: false,
+      });
+      return;
+    }
+
+    if (selection.type === "text") {
+      const source = current.textClips.find((clip) => clip.id === selection.id);
+      if (!source) return;
+      recordHistory(current);
+      const duplicate: TextClip = {
+        ...source,
+        id: makeId("text"),
+        name: `${source.name} copy`,
+        timelineStart: source.timelineStart + 250,
+        timelineEnd: source.timelineEnd + 250,
+        zIndex: getNextZIndex(current.textClips),
+        x: source.x + 20,
+        y: source.y + 20,
+      };
+      updateState({
+        textClips: [...current.textClips, duplicate],
+        selectedItem: { type: "text", id: duplicate.id },
         isDirty: true,
         canUndo: true,
         canRedo: false,
@@ -718,8 +824,9 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     const selection = stateRef.current.selectedItem;
     if (!selection) return;
     if (selection.type === "video") removeVideoClip(selection.id);
-    else removeAudioClip(selection.id);
-  }, [removeAudioClip, removeVideoClip]);
+    else if (selection.type === "audio") removeAudioClip(selection.id);
+    else removeTextClip(selection.id);
+  }, [removeAudioClip, removeTextClip, removeVideoClip]);
 
   const saveProject = useCallback(async () => {
     const snapshot = stateRef.current;
@@ -728,6 +835,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
       setState((current) => {
         const savedStateIsCurrent = current.clips === snapshot.clips
           && current.audioClips === snapshot.audioClips
+          && current.textClips === snapshot.textClips
           && current.effects === snapshot.effects
           && current.projectName === snapshot.projectName;
         return savedStateIsCurrent
@@ -744,7 +852,8 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     hasAttemptedAutosaveLoadRef.current = true;
     try {
       const restored = await loadProjectSnapshot();
-      if (!restored || stateRef.current.clips.length || stateRef.current.audioClips.length) return;
+      if (!restored || stateRef.current.clips.length || stateRef.current.audioClips.length
+        || stateRef.current.textClips.length) return;
       [...restored.clips, ...restored.audioClips]
         .forEach((clip) => objectUrlsRef.current.add(clip.clipURL));
       setState((previous) => withTimelineMetrics({
@@ -752,6 +861,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
         projectName: restored.name,
         clips: restored.clips,
         audioClips: restored.audioClips,
+        textClips: restored.textClips,
         effects: restored.effects,
         currentTime: 0,
         isSeeking: true,
@@ -770,7 +880,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     if (!state.isDirty) return;
     const timeout = window.setTimeout(() => void saveProject(), 1800);
     return () => window.clearTimeout(timeout);
-  }, [state.audioClips, state.clips, state.effects, state.isDirty, state.projectName, saveProject]);
+  }, [state.audioClips, state.clips, state.textClips, state.effects, state.isDirty, state.projectName, saveProject]);
 
   useEffect(() => {
     const warnIfDirty = (event: BeforeUnloadEvent) => {
@@ -846,7 +956,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
       } else if (key === "s") {
         event.preventDefault();
         if (stateRef.current.selectedItem?.type === "audio") splitAudioClip();
-        else void splitClip();
+        else if (stateRef.current.selectedItem?.type !== "text") void splitClip();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -868,9 +978,12 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     setAudioFile,
     removeVideoClip,
     removeAudioClip,
+    addTextClip,
+    removeTextClip,
     selectItem,
     updateVideoClip,
     updateAudioClip,
+    updateTextClip,
     bringToFront,
     duplicateSelected,
     deleteSelected,
@@ -901,9 +1014,12 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     setAudioFile,
     removeVideoClip,
     removeAudioClip,
+    addTextClip,
+    removeTextClip,
     selectItem,
     updateVideoClip,
     updateAudioClip,
+    updateTextClip,
     bringToFront,
     duplicateSelected,
     deleteSelected,
@@ -929,16 +1045,20 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
   const exportData = useMemo<EditorExportData>(() => ({
     clips: state.clips,
     audioClips: state.audioClips,
+    textClips: state.textClips,
     effects: state.effects,
     totalDuration: state.totalDuration,
-  }), [state.audioClips, state.clips, state.effects, state.totalDuration]);
+  }), [state.audioClips, state.clips, state.textClips, state.effects, state.totalDuration]);
 
   const propertiesData = useMemo<EditorPropertiesData>(() => ({
     clips: state.clips,
     audioClips: state.audioClips,
+    textClips: state.textClips,
     selectedItem: state.selectedItem,
     updateVideoClip,
     updateAudioClip,
+    updateTextClip,
+    addTextClip,
     bringToFront,
     duplicateSelected,
     deleteSelected,
@@ -952,12 +1072,15 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
   }), [
     state.clips,
     state.audioClips,
+    state.textClips,
     state.selectedItem,
     state.projectName,
     state.isDirty,
     state.loopPlayback,
     updateVideoClip,
     updateAudioClip,
+    updateTextClip,
+    addTextClip,
     bringToFront,
     duplicateSelected,
     deleteSelected,

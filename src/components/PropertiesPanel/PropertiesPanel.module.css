@@ -2,14 +2,18 @@
 .panel section { padding: 12px; border: 1px solid #343d4c; border-radius: 7px; background: #202632; }
 .panel h3 { margin: 0 0 10px; font-size: 13px; }
 .panel label { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; color: #aeb7c6; font-size: 11px; }
-.panel input, .panel select, .panel button { box-sizing: border-box; width: 100%; padding: 7px; border: 1px solid #414b5c; border-radius: 4px; background: #171b24; color: #fff; }
+.panel input, .panel select, .panel button, .panel textarea { box-sizing: border-box; width: 100%; padding: 7px; border: 1px solid #414b5c; border-radius: 4px; background: #171b24; color: #fff; }
+.panel textarea { resize: vertical; font: inherit; }
 .panel button { cursor: pointer; }
 .panel button:hover { border-color: #62aef7; }
 .checkbox { flex-direction: row !important; align-items: center; }
 .checkbox input { width: auto; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .mediaList { display: flex; max-height: 150px; flex-direction: column; gap: 5px; overflow-y: auto; }
+.addText { margin-bottom: 7px; border-color: #4f8fd0 !important; }
 .mediaList button { overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .mediaList p, .shortcuts p { margin: 4px 0; color: #8e99aa; font-size: 10px; }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 12px; }
 .actions .danger { grid-column: 1 / -1; border-color: #7e3340; color: #ff9aaa; }
+.toggleRow { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.toggleRow .active { border-color: #62aef7; background: #244a70; }

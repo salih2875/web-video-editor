@@ -1,6 +1,6 @@
 import React, { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useEditor } from "../../context/EditorContext";
-import type { AudioClip, Clip, Effect } from "../../types/editor";
+import type { AudioClip, Clip, Effect, TextClip } from "../../types/editor";
 import {
   PixiTimelineRenderer,
   PREVIEW_HEIGHT,
@@ -17,6 +17,7 @@ interface PlaybackSnapshot {
   clips: Clip[];
   audioClips: AudioClip[];
   effects: Effect[];
+  textClips: TextClip[];
   totalDuration: number;
   currentTime: number;
   isPlaying: boolean;
@@ -67,6 +68,7 @@ export const VideoPlayer: React.FC = () => {
     clips,
     audioClips,
     effects,
+    textClips,
     totalDuration,
     currentTime,
     isPlaying,
@@ -100,6 +102,7 @@ export const VideoPlayer: React.FC = () => {
     clips,
     audioClips,
     effects,
+    textClips,
     totalDuration,
     currentTime,
     isPlaying,
@@ -109,6 +112,7 @@ export const VideoPlayer: React.FC = () => {
     clips,
     audioClips,
     effects,
+    textClips,
     totalDuration,
     currentTime,
     isPlaying,
@@ -134,7 +138,7 @@ export const VideoPlayer: React.FC = () => {
     const renderer = rendererRef.current;
     if (!renderer) return;
     const snapshot = snapshotRef.current;
-    renderer.renderTimelineFrame(timelineTime, snapshot.clips, snapshot.effects);
+    renderer.renderTimelineFrame(timelineTime, snapshot.clips, snapshot.effects, snapshot.textClips);
   }, []);
 
   useEffect(() => {
@@ -391,7 +395,7 @@ export const VideoPlayer: React.FC = () => {
 
   useEffect(() => {
     if (!isPlaying && !isSeeking) syncMedia(currentTime, false);
-  }, [audioClips, clips, currentTime, effects, isPlaying, isSeeking, syncMedia]);
+  }, [audioClips, clips, textClips, currentTime, effects, isPlaying, isSeeking, syncMedia]);
 
   const beginPlayback = useCallback(() => {
     const startTime = currentTime >= totalDuration && totalDuration > 0 ? 0 : currentTime;
@@ -409,7 +413,7 @@ export const VideoPlayer: React.FC = () => {
     play();
   }, [currentTime, play, seek, syncMedia, totalDuration]);
 
-  const hasMedia = clips.length > 0 || audioClips.length > 0;
+  const hasMedia = clips.length > 0 || audioClips.length > 0 || textClips.length > 0;
   return (
     <div className={styles.playerContainer}>
       <div ref={pixiHostRef} className={styles.pixiHost} />
@@ -419,7 +423,7 @@ export const VideoPlayer: React.FC = () => {
       {audioClips.map((clip) => (
         <HiddenAudio key={clip.id} clip={clip} register={registerAudio} />
       ))}
-      {!clips.length && (
+      {!clips.length && !textClips.length && (
         <div className={styles.placeholder}>
           {audioClips.length ? "Audio-only project" : "Add video or audio to begin"}
         </div>
