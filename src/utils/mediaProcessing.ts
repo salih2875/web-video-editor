@@ -108,7 +108,7 @@ const decodeAudioPeaks = async (file: File, peakCount: number): Promise<number[]
       const end = Math.min(channel.length, start + samplesPerPeak);
       let max = 0;
       for (let index = start; index < end; index += 1) {
-        max = Math.max(max, Math.abs(channel[index]));
+        max = Math.max(max, Math.abs(channel[index] ?? 0));
       }
       return max;
     });

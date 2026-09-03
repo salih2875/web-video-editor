@@ -1,4 +1,4 @@
-import { useEditor } from "../../context/EditorContext";
+import { useEditor } from "../../context/editorContexts";
 import { EFFECT_CATEGORIES, EFFECT_DEFINITIONS } from "../../effects/effectCatalog";
 import { getTopTimelineItem } from "../../utils/timelineMath";
 import styles from "./EffectsPanel.module.css";

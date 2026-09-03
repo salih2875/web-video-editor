@@ -49,6 +49,11 @@ interface RenderVideoOptions {
 const MAX_ENCODER_QUEUE_SIZE = 12;
 const AVC_CODECS = ["avc1.64002a", "avc1.4d002a", "avc1.42002a"];
 
+const getAbortError = (signal: AbortSignal): Error =>
+  signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("Export cancelled.", "AbortError");
+
 const getBitrate = (quality: Quality) => {
   if (quality === "high") return 14_000_000;
   if (quality === "medium") return 9_000_000;
@@ -82,7 +87,7 @@ const waitForEncoderCapacity = (
     };
     const handleAbort = () => {
       cleanup();
-      reject(signal.reason ?? new DOMException("Export cancelled.", "AbortError"));
+      reject(getAbortError(signal));
     };
     encoder.addEventListener("dequeue", handleDequeue);
     signal.addEventListener("abort", handleAbort, { once: true });
@@ -153,7 +158,10 @@ const renderTimelineVideo = async ({
   const sources = new OfflineVideoSourcePool();
   const encodedChunks: Uint8Array[] = [];
   let encodedByteLength = 0;
-  let encoderError: Error | null = null;
+  const encoderError: { current: Error | null } = { current: null };
+  const throwIfEncoderFailed = () => {
+    if (encoderError.current) throw encoderError.current;
+  };
   let encoder: VideoEncoder | null = null;
 
   try {
@@ -166,7 +174,7 @@ const renderTimelineVideo = async ({
         encodedByteLength += data.byteLength;
       },
       error: (error) => {
-        encoderError = error;
+        encoderError.current = error;
       },
     });
     encoder.configure(config);
@@ -195,9 +203,9 @@ const renderTimelineVideo = async ({
       } finally {
         frame.close();
       }
-      if (encoderError) throw encoderError;
+      throwIfEncoderFailed();
       await waitForEncoderCapacity(encoder, signal);
-      if (encoderError) throw encoderError;
+      throwIfEncoderFailed();
       const progress = (frameIndex + 1) / frameCount;
       const progressPercent = Math.floor(progress * 100);
       if (progressPercent !== lastReportedPercent || frameIndex + 1 === frameCount) {
@@ -207,7 +215,7 @@ const renderTimelineVideo = async ({
     }
 
     await encoder.flush();
-    if (encoderError) throw encoderError;
+    throwIfEncoderFailed();
     signal.throwIfAborted();
     return mergeChunks(encodedChunks, encodedByteLength);
   } finally {

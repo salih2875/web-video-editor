@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { useEditor } from "../../context/EditorContext";
+import { useEditor } from "../../context/editorContexts";
 import styles from "./MediaUpload.module.css";
 
 export const MediaUpload = () => {
@@ -13,7 +13,7 @@ export const MediaUpload = () => {
   } = useEditor();
 
   const handleFile = useCallback(
-    (kind: "video" | "audio") => async (event: React.ChangeEvent<HTMLInputElement>) => {
+    (kind: "video" | "audio") => (event: React.ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0];
       event.target.value = "";
       if (!file) return;
@@ -21,7 +21,7 @@ export const MediaUpload = () => {
         setMediaError(`Please select a valid ${kind} file.`);
         return;
       }
-      await (kind === "video" ? setVideoFile(file) : setAudioFile(file));
+      void (kind === "video" ? setVideoFile(file) : setAudioFile(file));
     },
     [setAudioFile, setMediaError, setVideoFile],
   );

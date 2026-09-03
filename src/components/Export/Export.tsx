@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useEditorExportData } from "../../context/EditorContext";
+import { useEditorExportData } from "../../context/editorContexts";
 import type { ExportPhase } from "../../utils/pixiExportService";
 import styles from "./Export.module.css";
 

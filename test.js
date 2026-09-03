@@ -17,6 +17,7 @@ const frameTiming = await importTypescriptModule("./src/rendering/frameTiming.ts
 const playbackClock = await importTypescriptModule("./src/utils/playbackClock.ts");
 const audioFilterGraph = await importTypescriptModule("./src/utils/audioFilterGraph.ts");
 const effectCatalog = await importTypescriptModule("./src/effects/effectCatalog.ts");
+const editorState = await importTypescriptModule("./src/state/editorState.ts");
 const colorMatrixEffects = await importTypescriptModule(
   "./src/effects/applyColorMatrixEffect.ts",
 );
@@ -185,4 +186,49 @@ test("offset-based PIXI presets use the matrix-normalizing path", () => {
     ["technicolor", true],
     ["kodachrome", true],
   ]);
+});
+
+test("editor timeline metrics derive duration and clamp playback safely", () => {
+  const state = {
+    ...editorState.initialEditorState,
+    currentTime: 9_000,
+    isPlaying: true,
+    clips: [{ timelineEnd: 2_500 }],
+    audioClips: [{ timelineEnd: 4_000 }],
+    textClips: [{ timelineEnd: 3_000 }],
+  };
+
+  assert.deepEqual(
+    {
+      totalDuration: editorState.withTimelineMetrics(state).totalDuration,
+      currentTime: editorState.withTimelineMetrics(state).currentTime,
+      isPlaying: editorState.withTimelineMetrics(state).isPlaying,
+    },
+    { totalDuration: 4_000, currentTime: 4_000, isPlaying: true },
+  );
+
+  const empty = editorState.withTimelineMetrics({
+    ...editorState.initialEditorState,
+    currentTime: -100,
+    isPlaying: true,
+  });
+  assert.equal(empty.currentTime, 0);
+  assert.equal(empty.isPlaying, false);
+});
+
+test("editor selections are validated against their discriminated collection", () => {
+  const video = { id: "video-1" };
+  const audio = { id: "audio-1" };
+  const textClip = { id: "text-1" };
+
+  assert.equal(editorState.selectionExists(null, [], [], []), true);
+  assert.equal(
+    editorState.selectionExists({ type: "video", id: video.id }, [video], [audio], [textClip]),
+    true,
+  );
+  assert.equal(
+    editorState.selectionExists({ type: "audio", id: video.id }, [video], [audio], [textClip]),
+    false,
+  );
+  assert.equal(editorState.getNextZIndex([{ zIndex: 2 }, { zIndex: 7 }]), 8);
 });

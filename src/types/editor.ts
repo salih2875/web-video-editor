@@ -41,7 +41,8 @@ export interface AudioClip {
   muted: boolean;
   fadeIn: number;
   fadeOut: number;
-  sourceVideoClipId?: string;
+  /** Present while this track follows a video's timing; `undefined` explicitly detaches it. */
+  sourceVideoClipId?: string | undefined;
 }
 
 export interface TextClip {
@@ -99,6 +100,61 @@ export interface EditorState {
   timelineZoom: number;
 }
 
+/**
+ * Public mutation contracts deliberately exclude identity and media-source fields.
+ * Keeping these narrower than `Partial<Clip>` prevents UI code from accidentally
+ * replacing an object URL, source duration, thumbnail, or entity id.
+ */
+export type VideoClipPatch = Partial<Pick<
+  Clip,
+  | "name"
+  | "zIndex"
+  | "clipStart"
+  | "clipEnd"
+  | "clipDuration"
+  | "timelineStart"
+  | "timelineEnd"
+  | "transform"
+>>;
+
+export type AudioClipPatch = Partial<Pick<
+  AudioClip,
+  | "name"
+  | "zIndex"
+  | "clipStart"
+  | "clipEnd"
+  | "clipDuration"
+  | "timelineStart"
+  | "timelineEnd"
+  | "volume"
+  | "muted"
+  | "fadeIn"
+  | "fadeOut"
+  | "sourceVideoClipId"
+>>;
+
+export type TextClipPatch = Partial<Pick<
+  TextClip,
+  | "name"
+  | "text"
+  | "zIndex"
+  | "clipStart"
+  | "clipEnd"
+  | "clipDuration"
+  | "timelineStart"
+  | "timelineEnd"
+  | "x"
+  | "y"
+  | "fontFamily"
+  | "fontSize"
+  | "color"
+  | "opacity"
+  | "rotation"
+  | "align"
+  | "fontWeight"
+  | "fontStyle"
+>>;
+
 export interface EditorContextType extends EditorState {
   setVideoFile: (file: File | null) => Promise<void>;
   setAudioFile: (file: File | null) => Promise<void>;
@@ -107,9 +163,9 @@ export interface EditorContextType extends EditorState {
   addTextClip: () => void;
   removeTextClip: (id: string) => void;
   selectItem: (selection: MediaSelection | null) => void;
-  updateVideoClip: (id: string, patch: Partial<Clip>) => void;
-  updateAudioClip: (id: string, patch: Partial<AudioClip>) => void;
-  updateTextClip: (id: string, patch: Partial<TextClip>) => void;
+  updateVideoClip: (id: string, patch: VideoClipPatch) => void;
+  updateAudioClip: (id: string, patch: AudioClipPatch) => void;
+  updateTextClip: (id: string, patch: TextClipPatch) => void;
   bringToFront: (selection: MediaSelection) => void;
   duplicateSelected: () => void;
   deleteSelected: () => void;

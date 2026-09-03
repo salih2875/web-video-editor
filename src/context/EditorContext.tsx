@@ -1,22 +1,25 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
   AudioClip,
+  AudioClipPatch,
   Clip,
   EditorContextType,
   EditorState,
   EffectName,
   MediaSelection,
   TextClip,
+  TextClipPatch,
+  VideoClipPatch,
 } from "../types/editor";
+import {
+  EditorContext,
+  EditorExportDataContext,
+  EditorMediaActionsContext,
+  EditorPropertiesContext,
+  type EditorExportData,
+  type EditorMediaActions,
+  type EditorPropertiesData,
+} from "./editorContexts";
 import {
   loadProjectSnapshot,
   releaseCachedProjectAsset,
@@ -29,123 +32,23 @@ import {
   getMediaDuration,
 } from "../utils/mediaProcessing";
 import { getTopTimelineItem } from "../utils/timelineMath";
+import {
+  captureHistorySnapshot,
+  createEntityId,
+  getNextZIndex,
+  hasChanges,
+  initialEditorState,
+  selectionExists,
+  withTimelineMetrics,
+  type HistorySnapshot,
+} from "../state/editorState";
 
 const MAX_HISTORY_LENGTH = 50;
 const MIN_SPLIT_DURATION_MS = 50;
 const DEFAULT_TRANSFORM = { x: 0, y: 0, scale: 1, rotation: 0, fit: "contain" } as const;
 
-const initialEditorState: EditorState = {
-  clips: [],
-  audioClips: [],
-  textClips: [],
-  effects: [],
-  selectedItem: null,
-  totalDuration: 0,
-  currentTime: 0,
-  isSeeking: false,
-  isPlaying: false,
-  isGeneratingThumbnails: false,
-  isLoadingAudio: false,
-  mediaError: null,
-  projectName: "Untitled project",
-  isDirty: false,
-  canUndo: false,
-  canRedo: false,
-  snapEnabled: true,
-  loopPlayback: true,
-  timelineZoom: 1,
-};
-
-const EditorContext = createContext<EditorContextType | undefined>(undefined);
-type EditorMediaActions = Pick<EditorContextType, "setVideoFile" | "setAudioFile">;
-type EditorExportData = Pick<
-  EditorContextType,
-  "clips" | "audioClips" | "textClips" | "effects" | "totalDuration"
->;
-type EditorPropertiesData = Pick<
-  EditorContextType,
-  | "clips"
-  | "audioClips"
-  | "textClips"
-  | "selectedItem"
-  | "updateVideoClip"
-  | "updateAudioClip"
-  | "updateTextClip"
-  | "addTextClip"
-  | "bringToFront"
-  | "duplicateSelected"
-  | "deleteSelected"
-  | "saveProject"
-  | "setProjectName"
-  | "projectName"
-  | "isDirty"
-  | "loopPlayback"
-  | "setLoopPlayback"
-  | "selectItem"
->;
-const EditorMediaActionsContext = createContext<EditorMediaActions | undefined>(undefined);
-const EditorExportDataContext = createContext<EditorExportData | undefined>(undefined);
-const EditorPropertiesContext = createContext<EditorPropertiesData | undefined>(undefined);
-
-const makeId = (prefix: string) =>
-  `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-
 const getErrorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
-
-const hasChanges = <T extends object>(source: T, patch: Partial<T>) =>
-  Object.entries(patch).some(([key, value]) => Reflect.get(source, key) !== value);
-
-const getNextZIndex = (items: Array<{ zIndex: number }>) =>
-  items.reduce((highest, item) => Math.max(highest, item.zIndex), -1) + 1;
-
-const getTotalDuration = (clips: Clip[], audioClips: AudioClip[], textClips: TextClip[]) => {
-  let duration = 0;
-  for (const clip of clips) duration = Math.max(duration, clip.timelineEnd);
-  for (const clip of audioClips) duration = Math.max(duration, clip.timelineEnd);
-  for (const clip of textClips) duration = Math.max(duration, clip.timelineEnd);
-  return duration;
-};
-
-const withTimelineMetrics = (state: EditorState): EditorState => {
-  const totalDuration = getTotalDuration(state.clips, state.audioClips, state.textClips);
-  const currentTime = Math.min(state.currentTime, totalDuration);
-  return {
-    ...state,
-    totalDuration,
-    currentTime,
-    isPlaying: totalDuration > 0 && state.isPlaying,
-  };
-};
-
-interface HistorySnapshot {
-  clips: Clip[];
-  audioClips: AudioClip[];
-  textClips: TextClip[];
-  effects: EditorState["effects"];
-  selectedItem: EditorState["selectedItem"];
-}
-
-const captureSnapshot = (source: EditorState): HistorySnapshot => ({
-  // Editor updates replace arrays and changed records instead of mutating them,
-  // so snapshots can safely share immutable clip metadata, thumbnails, and peaks.
-  clips: source.clips,
-  audioClips: source.audioClips,
-  textClips: source.textClips,
-  effects: source.effects,
-  selectedItem: source.selectedItem,
-});
-
-const selectionExists = (
-  selection: MediaSelection | null,
-  clips: Clip[],
-  audioClips: AudioClip[],
-  textClips: TextClip[],
-) => !selection || (selection.type === "video"
-  ? clips.some((clip) => clip.id === selection.id)
-  : selection.type === "audio"
-    ? audioClips.some((clip) => clip.id === selection.id)
-    : textClips.some((clip) => clip.id === selection.id));
 
 export const EditorProvider = ({ children }: { children: ReactNode }) => {
   const [state, setState] = useState(initialEditorState);
@@ -159,7 +62,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
   const recordHistory = useCallback((source = stateRef.current) => {
     historyRef.current = [
       ...historyRef.current.slice(-(MAX_HISTORY_LENGTH - 1)),
-      captureSnapshot(source),
+      captureHistorySnapshot(source),
     ];
     futureRef.current = [];
   }, []);
@@ -214,7 +117,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
           (end, clip) => Math.max(end, clip.timelineEnd),
           0,
         );
-        const id = makeId("video");
+        const id = createEntityId("video");
         const clip: Clip = {
           id,
           name: file.name,
@@ -230,7 +133,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
           transform: { ...DEFAULT_TRANSFORM },
         };
         const soundtrack: AudioClip | null = peaks ? {
-          id: makeId("audio"),
+          id: createEntityId("audio"),
           name: `${file.name} · soundtrack`,
           zIndex: getNextZIndex(previous.audioClips),
           clipURL: url,
@@ -307,7 +210,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
           0,
         );
         const clip: AudioClip = {
-          id: makeId("audio"),
+          id: createEntityId("audio"),
           name: file.name,
           zIndex: getNextZIndex(previous.audioClips),
           clipURL: url,
@@ -420,7 +323,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     });
   }, [recordHistory]);
 
-  const updateVideoClip = useCallback((id: string, patch: Partial<Clip>) => {
+  const updateVideoClip = useCallback((id: string, patch: VideoClipPatch) => {
     const current = stateRef.current;
     const original = current.clips.find((clip) => clip.id === id);
     if (!original || !hasChanges(original, patch)) return;
@@ -455,7 +358,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     });
   }, [recordHistory]);
 
-  const updateAudioClip = useCallback((id: string, patch: Partial<AudioClip>) => {
+  const updateAudioClip = useCallback((id: string, patch: AudioClipPatch) => {
     const current = stateRef.current;
     const original = current.audioClips.find((clip) => clip.id === id);
     if (!original || !hasChanges(original, patch)) return;
@@ -477,7 +380,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     const timelineStart = current.currentTime;
     const clipDuration = Math.max(1000, current.totalDuration - timelineStart || 5000);
     const clip: TextClip = {
-      id: makeId("text"),
+      id: createEntityId("text"),
       name: "Text",
       text: "Your text",
       zIndex: getNextZIndex(current.textClips),
@@ -507,7 +410,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     });
   }, [recordHistory, updateState]);
 
-  const updateTextClip = useCallback((id: string, patch: Partial<TextClip>) => {
+  const updateTextClip = useCallback((id: string, patch: TextClipPatch) => {
     const current = stateRef.current;
     const original = current.textClips.find((clip) => clip.id === id);
     if (!original || !hasChanges(original, patch)) return;
@@ -560,7 +463,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
       const source = current.clips.find((clip) => clip.id === selection.id);
       if (!source) return;
       recordHistory(current);
-      const id = makeId("video");
+      const id = createEntityId("video");
       const offset = 250;
       const duplicate: Clip = {
         ...source,
@@ -576,7 +479,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
         .filter((audio) => audio.sourceVideoClipId === source.id)
         .map((audio, index) => ({
           ...audio,
-          id: makeId("audio"),
+          id: createEntityId("audio"),
           sourceVideoClipId: id,
           name: `${audio.name} copy`,
           timelineStart: audio.timelineStart + offset,
@@ -601,7 +504,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
       recordHistory(current);
       const duplicate: TextClip = {
         ...source,
-        id: makeId("text"),
+        id: createEntityId("text"),
         name: `${source.name} copy`,
         timelineStart: source.timelineStart + 250,
         timelineEnd: source.timelineEnd + 250,
@@ -624,7 +527,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     recordHistory(current);
     const duplicate: AudioClip = {
       ...source,
-      id: makeId("audio"),
+      id: createEntityId("audio"),
       name: `${source.name} copy`,
       timelineStart: source.timelineStart + 250,
       timelineEnd: source.timelineEnd + 250,
@@ -658,7 +561,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     );
     const first: AudioClip = {
       ...selected,
-      id: makeId("audio"),
+      id: createEntityId("audio"),
       sourceVideoClipId: undefined,
       clipEnd: selected.clipStart + offset,
       clipDuration: offset,
@@ -667,7 +570,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
     };
     const second: AudioClip = {
       ...selected,
-      id: makeId("audio"),
+      id: createEntityId("audio"),
       sourceVideoClipId: undefined,
       clipStart: selected.clipStart + offset,
       clipDuration: selected.clipDuration - offset,
@@ -688,7 +591,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
   const undo = useCallback(() => {
     const snapshot = historyRef.current.pop();
     if (!snapshot) return;
-    futureRef.current.push(captureSnapshot(stateRef.current));
+    futureRef.current.push(captureHistorySnapshot(stateRef.current));
     setState((previous) => withTimelineMetrics({
       ...previous,
       ...snapshot,
@@ -702,7 +605,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
   const redo = useCallback(() => {
     const snapshot = futureRef.current.pop();
     if (!snapshot) return;
-    historyRef.current.push(captureSnapshot(stateRef.current));
+    historyRef.current.push(captureHistorySnapshot(stateRef.current));
     setState((previous) => withTimelineMetrics({
       ...previous,
       ...snapshot,
@@ -753,7 +656,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
       recordHistory(latest);
       const first: Clip = {
         ...selected,
-        id: makeId("video"),
+        id: createEntityId("video"),
         clipEnd: sourceSplit,
         clipDuration: offset,
         timelineEnd: current.currentTime,
@@ -761,7 +664,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
       };
       const second: Clip = {
         ...selected,
-        id: makeId("video"),
+        id: createEntityId("video"),
         clipStart: sourceSplit,
         clipDuration: selected.clipDuration - offset,
         timelineStart: current.currentTime,
@@ -778,7 +681,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
         return [
           {
             ...audio,
-            id: makeId("audio"),
+            id: createEntityId("audio"),
             sourceVideoClipId: first.id,
             clipEnd: audio.clipStart + offset,
             clipDuration: offset,
@@ -787,7 +690,7 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
           },
           {
             ...audio,
-            id: makeId("audio"),
+            id: createEntityId("audio"),
             sourceVideoClipId: second.id,
             clipStart: audio.clipStart + offset,
             clipDuration: audio.clipDuration - offset,
@@ -1099,32 +1002,4 @@ export const EditorProvider = ({ children }: { children: ReactNode }) => {
       </EditorExportDataContext.Provider>
     </EditorMediaActionsContext.Provider>
   );
-};
-
-// eslint-disable-next-line react-refresh/only-export-components
-export const useEditor = (): EditorContextType => {
-  const context = useContext(EditorContext);
-  if (!context) throw new Error("useEditor must be used within an EditorProvider");
-  return context;
-};
-
-// eslint-disable-next-line react-refresh/only-export-components
-export const useEditorMediaActions = (): EditorMediaActions => {
-  const context = useContext(EditorMediaActionsContext);
-  if (!context) throw new Error("useEditorMediaActions must be used within an EditorProvider");
-  return context;
-};
-
-// eslint-disable-next-line react-refresh/only-export-components
-export const useEditorExportData = (): EditorExportData => {
-  const context = useContext(EditorExportDataContext);
-  if (!context) throw new Error("useEditorExportData must be used within an EditorProvider");
-  return context;
-};
-
-// eslint-disable-next-line react-refresh/only-export-components
-export const useEditorProperties = (): EditorPropertiesData => {
-  const context = useContext(EditorPropertiesContext);
-  if (!context) throw new Error("useEditorProperties must be used within an EditorProvider");
-  return context;
 };

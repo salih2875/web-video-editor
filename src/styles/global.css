@@ -119,9 +119,6 @@ body {
     background-color: #f8f9fa;
 }
 
-/* Ensure components inside main-left stretch */
-.editor-main-left>div:second-child {
-    /* VideoPlayer container */
+.editor-main-left > :nth-child(2) {
     flex-grow: 1;
-    /* Allow video player to take vertical space */
 }

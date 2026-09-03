@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useEffect, useRef, useState } from "react";
-import { useEditor } from "../../context/EditorContext";
+import { useEditor } from "../../context/editorContexts";
 import type { AudioClip, Clip, Effect, TextClip } from "../../types/editor";
 import {
   PixiTimelineRenderer,
@@ -187,7 +187,7 @@ export const VideoPlayer: React.FC = () => {
       height: PREVIEW_HEIGHT,
     });
     const { canvas } = renderer;
-    canvas.className = styles.canvas;
+    canvas.className = styles.canvas ?? "";
     host.appendChild(canvas);
     rendererRef.current = renderer;
     videoRefs.current.forEach((video, id) => renderer.registerVideo(id, video));

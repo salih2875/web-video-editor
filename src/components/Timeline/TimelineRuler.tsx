@@ -14,7 +14,13 @@ interface MarkerInterval {
   minorSeconds: number;
 }
 
-const MARKER_INTERVALS: MarkerInterval[] = [
+const FALLBACK_MARKER_INTERVAL: MarkerInterval = {
+  minimumPixelsPerSecond: 0,
+  majorSeconds: 600,
+  minorSeconds: 300,
+};
+
+const MARKER_INTERVALS: readonly MarkerInterval[] = [
   { minimumPixelsPerSecond: 200, majorSeconds: 0.5, minorSeconds: 0.1 },
   { minimumPixelsPerSecond: 100, majorSeconds: 1, minorSeconds: 0.2 },
   { minimumPixelsPerSecond: 50, majorSeconds: 2, minorSeconds: 0.5 },
@@ -23,7 +29,7 @@ const MARKER_INTERVALS: MarkerInterval[] = [
   { minimumPixelsPerSecond: 5, majorSeconds: 30, minorSeconds: 5 },
   { minimumPixelsPerSecond: 2, majorSeconds: 60, minorSeconds: 10 },
   { minimumPixelsPerSecond: 1, majorSeconds: 300, minorSeconds: 60 },
-  { minimumPixelsPerSecond: 0, majorSeconds: 600, minorSeconds: 300 },
+  FALLBACK_MARKER_INTERVAL,
 ];
 
 export const TimelineRuler = ({ duration, width, onTimeClick }: TimelineRulerProps) => {
@@ -33,7 +39,7 @@ export const TimelineRuler = ({ duration, width, onTimeClick }: TimelineRulerPro
     const pixelsPerSecond = width / durationSeconds;
     const interval = MARKER_INTERVALS.find(
       (candidate) => pixelsPerSecond > candidate.minimumPixelsPerSecond,
-    ) ?? MARKER_INTERVALS[MARKER_INTERVALS.length - 1];
+    ) ?? FALLBACK_MARKER_INTERVAL;
     const showMinorMarkers = pixelsPerSecond > 20;
     const step = showMinorMarkers ? interval.minorSeconds : interval.majorSeconds;
     const markerCount = Math.floor(durationSeconds / step);

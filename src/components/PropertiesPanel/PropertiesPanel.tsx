@@ -1,4 +1,4 @@
-import { useEditorProperties } from "../../context/EditorContext";
+import { useEditorProperties } from "../../context/editorContexts";
 import styles from "./PropertiesPanel.module.css";
 
 const parseNumber = (value: string, fallback: number) => {
@@ -279,10 +279,14 @@ export const PropertiesPanel = () => {
             <textarea
               rows={3}
               value={text.text}
-              onChange={(event) => updateTextClip(text.id, {
-                text: event.target.value,
-                name: event.target.value.split("\n")[0].slice(0, 30) || "Text",
-              })}
+              onChange={(event) => {
+                const value = event.target.value;
+                const firstLine = value.split("\n", 1)[0] ?? "";
+                updateTextClip(text.id, {
+                  text: value,
+                  name: firstLine.slice(0, 30) || "Text",
+                });
+              }}
             />
           </label>
           <div className={styles.grid}>

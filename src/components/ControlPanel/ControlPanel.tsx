@@ -1,5 +1,5 @@
 import React from "react";
-import { useEditor } from "../../context/EditorContext";
+import { useEditor } from "../../context/editorContexts";
 import { getTopTimelineItem } from "../../utils/timelineMath";
 import styles from "./ControlPanel.module.css";
 

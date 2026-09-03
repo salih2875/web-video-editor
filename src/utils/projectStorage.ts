@@ -93,10 +93,10 @@ export const loadProjectSnapshot = async (): Promise<{
   let project: StoredProject | undefined;
   try {
     project = await new Promise<StoredProject | undefined>((resolve, reject) => {
-      const request: IDBRequest<StoredProject | undefined> = database
+      const request = database
         .transaction(STORE_NAME, "readonly")
         .objectStore(STORE_NAME)
-        .get(AUTOSAVE_KEY);
+        .get(AUTOSAVE_KEY) as IDBRequest<StoredProject | undefined>;
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error ?? new Error("Could not restore project."));
     });

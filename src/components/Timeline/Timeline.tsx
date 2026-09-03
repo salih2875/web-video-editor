@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useEditor } from "../../context/EditorContext";
+import { useEditor } from "../../context/editorContexts";
 import type { AudioClip, Clip, MediaSelection, TextClip } from "../../types/editor";
 import { TimelineRuler } from "./TimelineRuler";
 import { ZoomControls } from "./ZoomControls";
@@ -69,7 +69,10 @@ export const Timeline: React.FC = () => {
   useEffect(() => {
     const element = wrapperRef.current;
     if (!element) return;
-    const observer = new ResizeObserver(([entry]) => setViewportWidth(entry.contentRect.width));
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) setViewportWidth(entry.contentRect.width);
+    });
     observer.observe(element);
     return () => observer.disconnect();
   }, []);

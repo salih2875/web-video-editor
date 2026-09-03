@@ -76,9 +76,11 @@ const loadAssetsIntoFFmpeg = async (
     while (nextIndex < urls.length) {
       const index = nextIndex;
       nextIndex += 1;
-      const data = await fetchAsset(urls[index], signal);
+      const url = urls[index];
+      if (url === undefined) return;
+      const data = await fetchAsset(url, signal);
       signal.throwIfAborted();
-      ffmpeg.FS("writeFile", getName(urls[index], index), data);
+      ffmpeg.FS("writeFile", getName(url, index), data);
     }
   };
   await Promise.all(
@@ -128,7 +130,9 @@ const createAudioFilters = (
     const inputIndex = inputIndexByUrl.get(url);
     if (inputIndex === undefined) throw new Error("An audio input was not prepared.");
     if (entries.length === 1) {
-      sourceLabelBySegment.set(entries[0].index, `[${inputIndex}:a]`);
+      const entry = entries[0];
+      if (!entry) throw new Error("An audio segment was not prepared.");
+      sourceLabelBySegment.set(entry.index, `[${inputIndex}:a]`);
       return;
     }
     const labels = entries.map(({ index }) => `[source${index}]`);

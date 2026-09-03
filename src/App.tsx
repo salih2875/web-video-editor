@@ -1,10 +1,12 @@
-import React, { Suspense, lazy, useCallback, useState } from "react";
-import { EditorProvider, useEditorMediaActions } from "./context/EditorContext";
+import { Suspense, lazy, useCallback, useRef, useState, type DragEvent } from "react";
+import { EditorProvider } from "./context/EditorContext";
+import { useEditorMediaActions } from "./context/editorContexts";
 import { MediaUpload } from "./components/MediaUpload/MediaUpload";
 import { VideoPlayer } from "./components/VideoPlayer/VideoPlayer";
 import { ControlPanel } from "./components/ControlPanel/ControlPanel";
 import { Timeline } from "./components/Timeline/Timeline";
 import { PropertiesPanel } from "./components/PropertiesPanel/PropertiesPanel";
+import { EditorErrorBoundary } from "./components/EditorErrorBoundary/EditorErrorBoundary";
 import "./styles/global.css";
 
 const EffectsPanel = lazy(() => import("./components/EffectsPanel/EffectsPanel").then((module) => ({ default: module.EffectsPanel })));
@@ -26,10 +28,11 @@ const INITIAL_PANEL_NAVIGATION: PanelNavigationState = {
   },
 };
 
-const EditorShell: React.FC = () => {
+const EditorShell = () => {
   const { setVideoFile, setAudioFile } = useEditorMediaActions();
   const [panelNavigation, setPanelNavigation] = useState(INITIAL_PANEL_NAVIGATION);
   const [isDragging, setIsDragging] = useState(false);
+  const dragDepthRef = useRef(0);
 
   const openPanel = useCallback((panel: PanelName) => {
     setPanelNavigation((previous) => ({
@@ -47,17 +50,32 @@ const EditorShell: React.FC = () => {
     }
   }, [setAudioFile, setVideoFile]);
 
+  const handleDragEnter = useCallback((event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDragging(false);
+  }, []);
+
+  const handleDrop = useCallback((event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDragging(false);
+    void importFiles(event.dataTransfer.files);
+  }, [importFiles]);
+
   return (
     <div
       className={`editor-layout ${isDragging ? "is-dragging" : ""}`}
-      onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }}
+      onDragEnter={handleDragEnter}
       onDragOver={(event) => event.preventDefault()}
-      onDragLeave={(event) => { if (event.currentTarget === event.target) setIsDragging(false); }}
-      onDrop={(event) => {
-        event.preventDefault();
-        setIsDragging(false);
-        void importFiles(event.dataTransfer.files);
-      }}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
       {isDragging && <div className="drop-overlay">Drop video or audio files</div>}
       <header className="editor-header"><h1>PIXI Video Editor</h1><MediaUpload /></header>
@@ -141,5 +159,11 @@ const EditorShell: React.FC = () => {
   );
 };
 
-const App: React.FC = () => <EditorProvider><EditorShell /></EditorProvider>;
+const App = () => (
+  <EditorErrorBoundary>
+    <EditorProvider>
+      <EditorShell />
+    </EditorProvider>
+  </EditorErrorBoundary>
+);
 export default App;
